@@ -1,0 +1,66 @@
+╔══════════════════════════════════════════════════════════════╗
+║                 SOU APP - QUICK REFERENCE                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+📍 URLS (Always the same now!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Frontend:   http://localhost:3000
+  Backend:    http://localhost:3002
+  Admin:      http://localhost:3000/admin
+
+🚀 START SERVERS (Pick one)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BEST:   ./keep-servers-alive.sh    (auto-restart if crash)
+  Easy:   npm start                   (parallel start)
+  Log:    ./start-all.sh              (background with logs)
+
+🛑 STOP SERVERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Press Ctrl+C in the terminal where servers are running
+
+🔧 FIX PORT CONFLICTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  lsof -ti:3000 | xargs kill -9    # Kill frontend
+  lsof -ti:3002 | xargs kill -9    # Kill backend
+
+✅ HEALTH CHECKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  curl http://localhost:3002/health     # Backend
+  curl http://localhost:3000            # Frontend
+
+📋 VIEW LOGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  tail -f logs/backend.log
+  tail -f logs/frontend.log
+
+🔐 CONFIGURATION FILES (.env)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Backend:   materials-server/.env
+    → PORT=3002
+    → MATERIALS_PATH=<Google Drive Path>
+
+  Frontend:  sou-song-browser/.env
+    → PORT=3000
+    → REACT_APP_API_URL=http://localhost:3002
+    → REACT_APP_MATERIALS_URL=http://localhost:3002
+
+🎯 WHAT'S FIXED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✅ Ports configured in .env files
+  ✅ No more port mismatches
+  ✅ Admin dashboard always shows songs
+  ✅ PDF buttons always work
+  ✅ Auto port cleanup on start
+  ✅ Keep-alive monitoring available
+  ✅ Original source files updated (not duplicates)
+
+📖 MORE INFO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  START_SERVERS.md              (detailed startup guide)
+  SERVER_PERSISTENCE_FIX.md     (what was fixed & why)
+  FIELD_MAPPING_ARCHITECTURE.md (backend integration docs)
+
+╔══════════════════════════════════════════════════════════════╗
+║  TIP: Use ./keep-servers-alive.sh for development sessions  ║
+║       It will auto-restart servers if they crash!            ║
+╚══════════════════════════════════════════════════════════════╝

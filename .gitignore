@@ -1,0 +1,41 @@
+# Environment variables
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.test.local
+.env.production.local
+.env.example
+node_modules
+
+# OS cruft
+.DS_Store
+
+# Python virtualenv
+.venv/
+
+# Nested app repos — each has its own git history, not part of this docs repo
+materials-server/
+sou-song-browser/
+
+# Large/local data, scripts, and app code that live outside the two app repos
+# (flagged separately from the docs-repo task — not discarded, just not committed here)
+Backups/
+logs/
+Song Database/
+src/
+scripts/
+artist_seed_list.csv
+artist_seed_list_backup_*.csv
+tmp2.txt
+
+# Root-level operational tooling/config — not documentation
+package.json
+package-lock.json
+start-all.sh
+START_APP.sh
+STOP_APP.sh
+keep-servers-alive.sh
+test-admin.sh
+vercel.json
