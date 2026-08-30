@@ -3093,4 +3093,78 @@ revisions requested.
 
 ---
 
+### 30 August 2026 — Phase 1 Built: Song-Sheet Content Extraction + searchSongContent Tool
+
+**Scope:** song-sheet PDFs only (chord/lyric sheets). TAB/melody notation extraction is
+explicitly out of scope — a 5-file proof-of-concept run earlier this session confirmed
+Guitar Pro TAB exports extract as garbled, unreadable text (fret numbers/scale labels out
+of visual order), while Keynote-built song sheets extract cleanly. That PoC also found
+`pdf-parse@2.x` hard-crashes on this repo's Node 18 runtime (depends on `pdfjs-dist`,
+which needs Node 20+/22+ `DOMMatrix`/`process.getBuiltinModule`) — `pdf-parse@1.1.1`
+(classic CJS build) was used instead, confirmed working.
+
+**1. Schema — `extracted_content` table**, added via the existing idempotent
+`runMigrations()` pattern in `dbManager.js` (same mechanism that carried `tool_calls` to
+production in Phase 0 — see 20 August entry above). **One deviation from the originally
+approved schema, flagged and applied:** `song_id` is `TEXT` (not `INTEGER` as first
+proposed) — `songs.id` is a TEXT slug primary key (e.g. `craig_david_7_days`), never an
+integer; an `INTEGER` FK would never have matched. Verified idempotent (ran twice locally,
+second run no-ops). Reaches production the same automatic way as prior migrations — no
+separate deploy step, but not yet actually run against the production DB.
+
+**2. Batch extraction — `extractSongSheetText.js`.** Dry-run mode by default (`--apply` for
+real), idempotent via `INSERT ... ON CONFLICT(song_id, source_type) DO UPDATE` (preserves
+row `id`/`created_at` across re-runs, cleaner than `INSERT OR REPLACE`). Classifies
+`success` (≥200 chars, ≥20 words) vs. `low_confidence` (extracted but too short/sparse) vs.
+`failed` (real exception, error text preserved verbatim). Read-only w.r.t. `songs` —
+`song_sheet_path`/`melody_tab_path`/`materials_json` untouched throughout.
+
+**Real run results — 191 songs with a non-null `song_sheet_path`:**
+- `success`: 175
+- `low_confidence`: 9
+- `failed`: 7 — 1 expected (`sabrina_carpenter_espresso`, the already-logged Espresso
+  gap — caught cleanly by an explicit pre-check rather than a raw fetch error), and
+  **6 new findings**, added to outstanding items below.
+
+**3. `searchSongContent` Studio tool** — new read-only AI tool, same pattern as
+`searchSongs`/`searchSeedCatalog`. Plain `LIKE` substring match against
+`extracted_content.extracted_text` (joined to `songs` for title/artist); FTS5 deliberately
+deferred, not implemented this pass. Wired into `services/aiProvider.js` (tool
+declaration, `TOOL_METADATA`, Gemini tool list, `executeTool()` dispatch) and
+`routes/chat.js` (new numbered `BASE_SYSTEM_PROMPT` section, plus the Phase-0-rework
+"verify before asserting SOU-specific facts" and tool-honesty paragraphs extended to
+explicitly cover lyric/chord-content claims, not just catalogue metadata). Tool
+description states plainly: song-sheet text only, no TAB, teaching-library-only (same 218
+songs as `searchSongs`), substring match not smart/thematic search.
+
+**`executeToolWithAudit()` checked, not modified:** confirmed it already handles read-only
+tools cleanly — the mutation-blocking branch is gated entirely on `TOOL_METADATA[name].isMutation`,
+which defaults `false` and only affects the wrapper's behavior when `true`. Flagging
+`searchSongContent` as `{ isMutation: false }` was sufficient; no wrapper changes needed.
+
+**Verified before considering this done:** smoke-tested `searchSongContent()` directly
+against the real extracted data (not through the AI) — correctly found "7 Days" by Craig
+David for `"subway"` and "All About That Bass" by Meghan Trainor for `"no treble"`, with
+accurate snippets; a nonsense query correctly returned zero results.
+
+**Not done this session:** the batch extraction has only been run against the local dev
+DB — production's `extracted_content` table will exist after the next deploy (automatic
+migration), but the 191-song batch job itself has not been run against production data.
+
+**Outstanding — new item, separate from the longstanding Espresso gap:**
+
+6 song-sheet PDFs are genuinely 0-byte empty objects on R2 (HTTP 200, `Content-Type:
+application/pdf`, `Content-Length: 0` — confirmed via direct HEAD requests, not just the
+extraction script's error message). Pre-existing data-integrity issue, unrelated to Phase 1
+and not fixed here:
+
+- `supergrass_alright` — "Alright" by Supergrass
+- `radiohead_creep` — "Creep" by Radiohead
+- `donna_summer_hot_stuff` — "Hot Stuff" by Donna Summer
+- `scott_mckenzie_san_francisco` — "San Francisco" by Scott McKenzie
+- `dodgy_staying_out_for_the_summer` — "Staying Out For The Summer" by Dodgy
+- `mike_oldfield_tubular_bells_from_the_exorcist` — "Tubular Bells from The Exorcist" by Mike Oldfield
+
+---
+
 **END OF MASTER_ARCHITECTURE.MD**
