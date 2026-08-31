@@ -61,6 +61,8 @@ An August 2026 four-day design/UX Q&A produced a consolidated specification for 
 
 ## Addendum — 30 Aug 2026: newer session, not yet reflected above
 
+**Correction, added at session close (30 Aug 2026):** the claim below — that the audit trail, STUDIO-01 guard, and seed-catalogue tools were "deliberately NOT committed or shipped" — was verified against the actual repos later the same day and found to be **wrong**. All of that work was genuinely committed and pushed to `origin/main` on both repos (confirmed via `git log` against the actual remote, cross-checked against real commit hashes: `6f7af60, e309306, 9c6d608, 6d2c3a8, 50edd77, 6546420, 3e41891, dfabb8b` on `materials-server`; `d776586, d3f8fca, eccc27c` on `sou-song-browser`). `MASTER_ARCHITECTURE.md`'s Session 18 log had it right; this addendum's account below did not. Source of the discrepancy was never established. The paragraphs below are left unedited as a record of what was believed at the time — treat them as historical, not current, and see `MASTER_ARCHITECTURE.md`'s session log for the verified account.
+
 A session after 26 Aug (before 30 Aug) did substantial AI/Studio tooling work. This is more recent than everything else in this document and should be treated as the current state of the AI/Studio thread specifically.
 
 **Built, tested, but deliberately NOT committed or shipped:** `searchSeedCatalog` and `promoteSongFromSeed` (in `services/seedService.js`, `services/aiProvider.js`, `routes/chat.js`, backend repo `materials-server`) — gives Studio the ability to search the 47K discovery catalogue and promote songs into the teaching library. All code remains local/uncommitted because testing surfaced three reliability problems judged serious enough to block shipping:
@@ -79,6 +81,26 @@ A related investigation into inconsistent AI behaviour was resolved mostly as "w
 > A write is considered to have happened only when the backend confirms it. Studio text must never be the source of truth for mutations.
 
 **⚠️ Open structural question, not yet resolved:** `PRODUCT_ROADMAP.md` now documents a **Phase 0 → Phase 1** sequence (Phase 0 = stabilise Studio tool integrity: audit trail, fix STUDIO-01, ship the system prompt rework, validate the two new tools; Phase 1 = PDF/lyric text extraction) that sits **alongside** the September Utility Milestone A/B/C spine (Arrangement → Print/PDF → Lesson Planning) documented elsewhere in this project. It is not yet clear whether Phase 0 blocks Milestone A, runs in parallel with it, or has superseded it as the actual next priority. **Confirm this with Matthew or by re-reading the current `PRODUCT_ROADMAP.md` in full before starting implementation work** — don't assume either sequencing silently.
+
+## Addendum — 30 Aug 2026 (session close): verified current state
+
+This supersedes the addendum above for anything it touches. Verified against real repos/commits, not reconstructed from memory or a prior account.
+
+**Phase 0 — closed.** Audit trail, STUDIO-01 guard, seed-catalogue tools, and the system-prompt rework are all committed and live on `origin/main` (`materials-server` commit `431acf8` for the system-prompt piece specifically; the rest confirmed under the commit hashes listed in the correction above).
+
+**Phase 1 (song-sheet content extraction) — closed.** New `extracted_content` table (note: `song_id` is `TEXT`, matching `songs.id`'s real type — the original proposal wrote `INTEGER` and this was caught and fixed before shipping). Batch extraction ran against all 191 songs with a `song_sheet_path`: 175 succeeded, 9 low-confidence, 7 failed. Of the failures: Sabrina Carpenter's "Espresso" is the already-known missing-file gap; the other 6 are a **new finding** — genuinely empty (0-byte) PDF objects on R2, real broken song sheets currently live in production for: Alright (Supergrass), Creep (Radiohead), Hot Stuff (Donna Summer), San Francisco (Scott McKenzie), Staying Out For The Summer (Dodgy), Tubular Bells from The Exorcist (Mike Oldfield). Not yet fixed — needs a re-upload of the correct PDFs. New Studio tool `searchSongContent` built, tested (real smoke tests against live extracted data, not just syntax checks), and wired in — read-only, searches song-sheet lyrics/chords only, explicitly does not cover TAB content (TAB-sheet extraction was tried and scoped out: Guitar Pro's PDF export format doesn't yield usable text — confirmed via a 5-file proof-of-concept, not assumed). Committed as `materials-server` commit `364d9ea`.
+
+**Milestone A / Phase 2 — v4 architecture proposal approved by Matthew, 30 Aug 2026.** Not yet implemented. Per `PRODUCT_ROADMAP.md`'s stated sequencing (confirmed unambiguous on a full read of Sections 17–18, resolving what had been flagged as an open question earlier the same day), this is the next major build now that Phase 0 and Phase 1 are both closed — but that should be explicitly reconfirmed at the start of the next session, not assumed automatically.
+
+**Documentation/process changes this session, relevant beyond just this doc:**
+- All canonical docs now live in a real git repo, `dukeofuke-png/sou-app-docs`, with actual version history — created this session after discovering the five most important docs (this one included) had no backup anywhere except manually-uploaded copies in Claude's Project Knowledge.
+- Dated-filename versioning (`MASTER_ARCHITECTURE [30 Aug 2026].md`) is retired going forward — one canonical filename per doc, git commits as the version record. See the Project Operating System doc's Section 2.1 for detail.
+
+**Still open, non-urgent, carried into next session:**
+1. The 6 empty-file songs above — need real PDFs re-uploaded to R2.
+2. `sou-song-browser`'s `SongDetailModal.js` has an uncommitted local diff, discovered but never triaged.
+3. The outer `SOU App/` repo root contains an unexplained `src`/`scripts` folder — app code outside both known repos (`materials-server`, `sou-song-browser`), origin unknown, not investigated.
+4. `songs.id` is a TEXT slug, not an integer — the approved Milestone A v4 proposal's `arrangements.song_id` still says `INTEGER`. Needs correcting before that schema gets implemented.
 
 ## Song sheet database landscape (for context, not action)
 
