@@ -661,6 +661,22 @@ Chord palette is generated automatically from chords used and can offer one or s
 Performance Notes are free-position annotations linked to section/phrase/lyric/chord/bar and may contain formal strum/picking references or free text.  
   
 Lyrics/chords remain structurally in Song flow; teaching overlays can be positioned more freely. Do not build a general DTP application for digital Canvas.  
+
+**30a. Arrangement Builder — manual chord/lyric import (approved 31 Aug 2026, first build slice)**  
+
+Alongside the flow above (which assumes inspecting/branching from an existing published Arrangement or a pre-populated Song source), a second, additional entry point exists for when no such source is available yet: a tutor pastes chord/lyric text directly.  
+
+Workflow:  
+
+  ●	tutor opens/creates an Arrangement for a Song  
+  ●	a monospace plain-text paste surface accepts pasted chord/lyric text (e.g. copied from Ultimate Guitar)  
+  ●	the system parses the paste into sections, lyrics, chords, and chord positions, and shows the result for review  
+  ●	tutor can correct lyrics, chords, chord positions, and section structure before anything is saved  
+  ●	reviewed content is saved as the Arrangement  
+
+**Flagged relationship to the design above, not a contradiction:** this document's existing repeated-section model (line 655) has repeated sections inherit from a core linked section by default. The approved Phase 1 import architecture deliberately does not build this yet — repeated sections parsed from a paste are stored as independent sections with no reference/reuse relationship, as a reduced-fidelity MVP subset of the behaviour designed here, not a change to it. The full inheritance behaviour remains the target design for when it's built.  
+
+Detailed parser behaviour and data shape are not specified here — see `MASTER_ARCHITECTURE.md` Section 5.5.  
   
   
   

@@ -300,6 +300,16 @@ Even though v1 should stay lean, do not store the entire native songsheet as an 
 
 The exact schema must be designed against the real existing codebase before implementation.
 
+## First functional slice: manual chord/lyric import (approved 31 Aug 2026)
+
+School of Uke does not yet have commercial licensing/catalogue infrastructure for bulk song-content acquisition. Rather than block v1's "enter/edit the song's core sheet content comfortably" objective on that unresolved parallel track, the first concrete build step is a tutor-first manual import path: a tutor pastes chord/lyric text (initially copied from Ultimate Guitar desktop), the app parses it into structured Arrangement content, the tutor reviews and corrects it, and only the reviewed result is persisted.
+
+**Paste → parse → review → persist is the first functional Arrangement Builder slice.** Print/PDF export (Definition of Done items 6–7 above) is a later slice, not part of this one.
+
+Commercial licensing/bulk catalogue ingestion remains a parallel, non-blocking future track — this manual path exists so tutors have working Arrangement-creation capability now, independent of when that track resolves.
+
+Full schema and parser specification live in `MASTER_ARCHITECTURE.md` Section 5.5 — not duplicated here.
+
 ---
 
 # 8. PHASE 3 — Curriculum and lesson-plan integration

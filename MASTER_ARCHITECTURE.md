@@ -47,6 +47,7 @@ Tutors should be able to use the platform as a comprehensive tool to devise less
   - Lightweight (auto on promote): `enrichmentService.js` → Spotify identity + GetSongBPM + YouTube
   - Rich (on-demand via ⚡): `enrichmentService_sqlite.js` → Wikipedia + Last.fm + GetSongBPM + Spotify cover art + MusicBrainz + release era/season/month derivation (no extra API call)
 - **`POST /api/songs/:id/enrich`** — on-demand rich enrichment endpoint, auth-gated
+- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). `resources`/`resource_files`/Print/PDF remain not-yet-started — see Section 5.5.
 - Chart enrichment (Wikipedia scraper + Soundcharts API)
 - BPM/Key enrichment (GetSongBPM API, `api.getsong.co`)
 - Spotify integration (track search, artist genres, cover art)
@@ -389,6 +390,123 @@ cd sou-song-browser && npm start
 │   - Column reordering                                                 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+### 5.5 ARRANGEMENT / SONGSHEET SYSTEM — APPROVED ARCHITECTURE, NOT YET IMPLEMENTED
+
+**Status: approved by Matthew, 31 August 2026. No code exists yet — `arrangements`, `resources`, and `resource_files` tables are not present in the live database, and no migration has been written or run.** This subsection records the frozen target schema so implementation proceeds against one agreed design. It documents an approved plan, not current running code — do not read anything below as evidence a table exists. See Section 17 (30 Aug 2026 entry) for what content-related work has actually shipped so far (`extracted_content`, `searchSongContent`).
+
+#### 5.5.1 Canonical relationship
+
+```
+Song (identity, dynamic) → Arrangement (tutor-authored, dynamic key) → Songsheet/Resource (fixed print key) → resource_files (PDF ledger)
+```
+
+- **Song** — the existing `songs` table, unchanged by this work. Canonical musical identity/catalog metadata.
+- **Arrangement** — canonical editable lyrics, chords, section structure, chord-to-lyric spatial positioning, teaching key. New `arrangements` table, schema below.
+- **Songsheet/Resource** — presentation/composition derived from an Arrangement at a fixed print key. New `resources` table; full schema to be finalised in its own implementation slice, but its content model is already fixed (5.5.6).
+- `extracted_content.extracted_text` (Section 17, 30 Aug 2026 entry) remains search/index data only. It is unstructured PDF-extracted text with chords and lyrics undifferentiated, used solely by `searchSongContent` — it is not, and must not become, a source of canonical Arrangement content.
+
+#### 5.5.2 `arrangements` table — approved schema
+
+```sql
+CREATE TABLE arrangements (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  song_id                TEXT NOT NULL REFERENCES songs(id),     -- songs.id is a TEXT slug, confirmed — NOT INTEGER
+  tutor_id               INTEGER NOT NULL REFERENCES tutors(id), -- confirmed INTEGER PK, see addChatTables.js
+
+  title                  TEXT,
+  status                 TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  default_teaching_key   TEXT,
+
+  body_json              TEXT NOT NULL,
+  body_schema_version    INTEGER NOT NULL DEFAULT 1,
+
+  import_source_text     TEXT,   -- raw pasted source, retained unchanged; provenance/debugging only
+  import_source_type     TEXT,   -- e.g. 'manual_paste'; naming follows the existing extracted_content.source_type convention
+  import_source_url      TEXT,   -- optional source page URL
+
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  content_updated_at     TEXT NOT NULL DEFAULT (datetime('now')),  -- bumped only by body_json writes, never by metadata-only edits
+  published_at           TEXT
+);
+
+CREATE INDEX idx_arrangements_song_id ON arrangements(song_id);
+CREATE INDEX idx_arrangements_tutor_id ON arrangements(tutor_id);
+CREATE INDEX idx_arrangements_status ON arrangements(status);
+```
+
+**Implementation note (31 Aug 2026):** the schema above shipped in two passes, not one — the base table (13 columns, no `import_source_type`/`import_source_url`) was implemented and verified first; `import_source_type` and `import_source_url` were a same-day fast-follow correction added via a guarded `ALTER TABLE` in `runMigrations()` after review found they'd been specified here but missed in the initial implementation. The schema above is the current, correct state; see Section 17 (31 Aug 2026, "Arrangement Builder Phase 1" entry) for the two-pass history.
+
+`status = 'published'` means the Arrangement's native content is shared into the SOU library and visible to other tutors/admins — independent of whether a PDF has ever been generated from it. PDF generation (a future `resource_files` write) is gated on `status = 'published'`.
+
+`import_source_text` / `import_source_type` / `import_source_url` are supporting provenance/debugging data, not canonical musical content. They make the parsing step in 5.5.5 auditable and re-checkable; they are never read by rendering or transposition logic.
+
+#### 5.5.3 `body_json` — positional-anchor content model (`schema_version: 1`)
+
+This is the sole approved content shape. An earlier interleaved chord/lyric token-stream shape was explored during design discussion (26 Aug 2026) but was never implemented and never entered this document — it is superseded by the model below and should not be reintroduced.
+
+```json
+{
+  "schema_version": 1,
+  "sections": [
+    {
+      "id": "sec_1",
+      "type": "lyrics_chords",
+      "title": "Verse 1",
+      "content": {
+        "lines": [
+          {
+            "lyric": "You count up the years, and they will be filled with tears",
+            "chords": [
+              { "position": 0,  "chord": { "symbol": "Bb",     "root": "Bb", "quality": "major", "bass": null } },
+              { "position": 28, "chord": { "symbol": "Bbmaj7", "root": "Bb", "quality": "maj7",  "bass": null } }
+            ]
+          }
+        ]
+      }
+    },
+    { "id": "sec_2", "type": "annotation", "content": { "text": "Capo 2, gentle strum" } }
+  ]
+}
+```
+
+Key properties:
+- Lyric text is stored once per line, as a plain string.
+- Chords are stored separately, each carrying a `position` — a character offset into that line's `lyric` string.
+- `position` preserves the source's exact horizontal chord placement — mid-word, between-word, and trailing positions beyond the last lyric character are all valid — rather than an approximated "nearest word" attachment.
+- Chord-only lines (instrumental hits, intro/outro chords) use `lyric: ""`; the chord's `position` is retained regardless.
+- `chord.symbol` is the canonical authored string, always present and authoritative for display. `root` / `quality` / `bass` are best-effort, nullable, and consumed by transposition when populated — a chord with only `symbol` set simply isn't transposable yet, which is correct, not an error state.
+- Editing lyric text must rebase the `position` of any chord anchored after the edit point (standard insert/delete offset-shifting). This is a binding requirement on the review/edit UI implementation, not a schema concern.
+
+#### 5.5.4 Normalization rule for `position` (parser specification)
+
+`position` values are calculated against **normalized** input, never the raw paste:
+- line endings normalized
+- **tabs expanded to exactly 4 spaces** — pinned, approved 31 August 2026, required for deterministic anchors. Without a fixed width, the same paste could parse to different `position` values depending on the application it was copied through.
+- internal whitespace otherwise preserved exactly; never collapsed
+
+The raw, un-normalized paste is preserved verbatim in `import_source_text` regardless of how normalization/parsing subsequently processes it.
+
+#### 5.5.5 Import workflow — first Arrangement Builder implementation slice
+
+`paste → normalize → parse → review/edit → persist`
+
+1. **Paste** — monospace plain-text surface. Phase 1 ingests `text/plain` only; clipboard HTML is not used.
+2. **Normalize** — per 5.5.4.
+3. **Parse** — detects section headings (`[Verse 1]`, `[Chorus]`, `[Bridge]`, `[Pre-Chorus]`, `[Breakdown]`, `[Intro]`, `[Outro]`, and similar bracketed conventions); pairs chord lines with the lyric line beneath them; computes `position` from column offset. Chord-only/instrumental lines are supported. Unsupported tab/tablature blocks are ignored safely rather than failing the import. Repeated sections (e.g. two `[Chorus]` blocks) are imported as independent sections for MVP — no reference/reuse relationship between them.
+4. **Review/edit** — tutor corrects lyrics, chords, chord positions, and section structure before anything is persisted.
+5. **Persist** — only reviewed, structured content becomes canonical `arrangements.body_json`. The raw paste remains in `import_source_text` as provenance, never as a competing content source.
+
+#### 5.5.6 Downstream compatibility — `resources.composition_json`
+
+`resources.composition_json.content_snapshot.sections` uses the same positional-anchor vocabulary as `arrangements.body_json` — a transposed, print-key-fixed snapshot captured at sync time, not a live reference to the Arrangement. No translation between two different content shapes occurs anywhere in this pipeline.
+
+#### 5.5.7 Explicitly out of scope for this slice
+
+Automated Ultimate Guitar scraping/API integration, AI transcription, audio chord extraction, TAB import/rendering, Arrangement version history, reusable repeated-section references, multi-import audit tables, and new authentication/role architecture are not part of this approved architecture. Commercial song-licensing/catalogue ingestion remains a parallel, non-blocking future track — see `PRODUCT_ROADMAP.md` Section 7.
 
 ---
 
@@ -1147,6 +1265,15 @@ Forward product direction, phased sequencing, and priorities are maintained excl
 
 ## 15. DECISIONS LOG
 
+### 31 August 2026 — Arrangement Positional-Anchor Model Frozen; Phase 1 Chord/Lyric Import Architecture Approved
+
+**Decision:** Canonical `arrangements.body_json` stores chord-to-lyric positioning as a character-offset anchor per chord against a plain per-line lyric string (`lines: [{ lyric, chords: [{ position, chord }] }]`), not as an interleaved chord/lyric token stream. Tab characters are expanded to exactly 4 spaces before position calculation. `arrangements.song_id` is `TEXT`; `arrangements.tutor_id` is `INTEGER`. Raw pasted source text is retained on the Arrangement row (`import_source_text`, `import_source_type`, `import_source_url`) as provenance only, never as canonical content.  
+**Reason:** Preserves exact chord/lyric spatial relationship as pasted (mid-word, between-word, trailing positions) rather than collapsing it to nearest-word sequence order, while remaining simpler to parse and edit than an interleaved token stream — a chord's column offset in the source is copied directly as its `position`, no word-attachment heuristic required. `song_id`/`tutor_id` types were verified directly against `songs.id` (TEXT slug) and `addChatTables.js` (`tutors.id INTEGER PRIMARY KEY AUTOINCREMENT`) rather than assumed.  
+**Impact:** Full schema, parser specification, and workflow recorded in Section 5.5. First implementation slice is paste → normalize → parse → review/edit → persist (no Print/PDF in this slice). No Copilot implementation authorised from this decision alone — a Copilot-ready prompt is a separate step.  
+**Alternatives considered:** Interleaved chord/lyric token stream (explored 26 Aug 2026, never implemented, superseded by this decision); nearest-word chord attachment (rejected — loses exact source positioning, the thing tutors are pasting to preserve).
+
+---
+
 ### 25 May 2026 — Deployment Target Changed
 
 **Decision:** Use Railway (backend) + Vercel (frontend) instead of AWS Lambda  
@@ -1886,7 +2013,7 @@ Matthew confirmed `FRONTEND_URL=https://sou-song-browser.vercel.app` is already 
 
 **Task 1: Chat DB schema design & migration**
 
-Five new tables added to `sou_songs.db` via `addChatTables.js` migration:
+Five new tables added to `sou_songs.db` via `addChatTables.js` migration (standalone one-off script, run directly against the DB this session — not the automatic startup migration path). The same table definitions were later mirrored into `dbManager.runMigrations()` so they also apply automatically on every server boot and reach the Railway Volume on deploy without a manual script run. `runMigrations()` in `dbManager.js` is the mechanism all new tables since have used (e.g. `tool_calls`, `extracted_content`, `arrangements` — see Section 17); `addChatTables.js` itself was not re-used or extended for later tables.
 
 | Table | Purpose |
 |---|---|
@@ -3164,6 +3291,52 @@ and not fixed here:
 - `scott_mckenzie_san_francisco` — "San Francisco" by Scott McKenzie
 - `dodgy_staying_out_for_the_summer` — "Staying Out For The Summer" by Dodgy
 - `mike_oldfield_tubular_bells_from_the_exorcist` — "Tubular Bells from The Exorcist" by Mike Oldfield
+
+---
+
+### 31 August 2026 — Arrangement Import Architecture Frozen; Documentation Sync (Claude, docs-only session)
+
+**Scope:** No code changed. This session closed the documentation gap flagged in the Project Operating System doc — the Milestone A v4 schema approved 30 Aug 2026 had never actually been written into this file, existing only in chat history. Session also revised that schema before recording it.
+
+**Revision made to the approved design this session:** the v4 proposal's `body_json` used an interleaved chord/lyric token stream (chord and lyric tokens in a single ordered array per line). Reviewed and replaced with a positional-anchor model — plain lyric string per line, chords stored separately with a character-offset `position` — because the token-stream shape collapses chord placement to "before this word," losing exact source position (mid-word, trailing chords). The new shape preserves exact position, is simpler to parse directly from Ultimate-Guitar-style column-aligned paste, and is simpler to edit (lyric text is a normal string, not a token array). Full detail: Section 5.5.
+
+**Verified directly against repo/data this session, not assumed:**
+- `songs.id` — confirmed `TEXT` slug PK (already known from Phase 1).
+- `tutors.id` — confirmed `INTEGER PRIMARY KEY AUTOINCREMENT` by direct inspection of `addChatTables.js` (uploaded and read in full). `arrangements.tutor_id INTEGER` and `resources.tutor_id INTEGER` are both correct as specified.
+- `sou-song-browser` (public repo) cloned and inspected directly: confirmed no paste/parse UI, no monospace text-entry surface, and no chord/lyric positioning logic exists anywhere in the frontend (`SongEditor.js` and `ManageSOUDatabase.js` are both metadata-only forms). `materials-server` (private repo) could not be cloned in this sandbox — conclusions about backend absence of an ingestion pipeline rest on `MASTER_ARCHITECTURE.md`'s and the Gap Analysis's explicit inventories, not direct code read, and are flagged as such.
+
+**Approved this session (Matthew, via ChatGPT):**
+- Positional-anchor `body_json` model, `schema_version: 1` (not `2` — nothing has shipped, so there is no prior production version to increment past).
+- Tab expansion pinned to exactly 4 spaces for deterministic `position` calculation.
+- `import_source_text` / `import_source_type` / `import_source_url` as Arrangement-level provenance fields (no separate audit table for MVP).
+- Paste → normalize → parse → review/edit → persist as the first Arrangement Builder implementation slice, with Print/PDF export explicitly out of scope for this slice.
+
+**Documentation updated this session:**
+- `MASTER_ARCHITECTURE.md` — new Section 5.5 (full schema/workflow), new Decisions Log entry (31 Aug 2026), this Session Log entry.
+- `PRODUCT_ROADMAP.md` — Phase 2 section clarified to identify the paste-import slice as the first concrete step toward its existing v1 Definition of Done (sequencing/priority only, no schema duplicated — see that document).
+- Consolidated Product & UX Specification — Section 30 (Song Studio/Song Canvas) extended with the paste-import entry path as an additional route into Arrangement creation, explicitly scoped as a reduced-fidelity MVP subset of that section's existing designed behaviour (see that document for the flagged relationship between the two).
+
+**Not done this session:** no Copilot prompt written. Per Section 0 of the Project Operating System doc, this counts as a genuine revision to the previously-approved v4 proposal (content shape, schema_version, new columns) plus new scope (the ingestion pipeline itself) — it requires Matthew's explicit implementation sign-off as its own step, not inferred from this documentation update. Findings return to ChatGPT for review before any implementation prompt is written.
+
+---
+
+### 31 August 2026 — Arrangement Builder Phase 1: `arrangements` Table + Parser + Endpoints Shipped (Two Passes)
+
+**Scope:** Backend only, `materials-server`. Implements the paste-import slice approved earlier the same day (see the Decisions Log entry and Session Log entry above): `arrangements` table, `services/arrangementParser.js`, and three endpoints (`POST /api/arrangements/parse-preview`, `POST /api/arrangements`, `GET /api/arrangements/:id`).
+
+**Built in two passes, not one — recorded accurately rather than as a single clean slice:**
+
+**Pass 1 — base table and endpoints.** `arrangements` table added to `dbManager.runMigrations()` (13 columns: the approved 5.5.2 schema as it stood at the time — single `import_source_text` column, no `parent_arrangement_id`). `arrangementParser.js` implements `parseArrangementText()`: tab expansion to 4 spaces before any column-index math, `[Section]` header detection, chord/lyric line pairing by column offset, chord-only lines (`lyric: ""`), repeated sections stored as independent sections, best-effort chord decomposition (`root`/`quality`/`bass`, nullable) via regex. Endpoints wired behind `auth.requireAuth`, the same middleware protecting other mutating admin routes; `TUTOR_ID = 1` hardcoded per the existing `routes/chat.js` convention. Verified: `PRAGMA table_info` matched the approved schema exactly; migration idempotency confirmed across a full server restart (not just a direct function call); `parse-preview` tested against a real multi-section paste with a chord-only line and a repeated `[Chorus]`; persist → fetch round-tripped `body_json` unchanged; invalid `song_id` correctly returned 400, not 500 or a silent insert. Test rows deleted from the local dev DB after verification.
+
+**Pass 2 — fast-follow correction.** Review against Section 5.5.2 found `import_source_type` and `import_source_url` were part of the approved schema but missing from Pass 1's table. Added via a guarded `ALTER TABLE arrangements ADD COLUMN ...` in `runMigrations()` — guarded because SQLite has no `ADD COLUMN IF NOT EXISTS`, so the existing column set is checked via `PRAGMA table_info(arrangements)` first (same pattern already used for the `songs.enrichment_status` columns). `POST /api/arrangements` updated to accept both fields as optional, defaulting to `null`; `GET /api/arrangements/:id` needed no code change since it already returns the full row. Verified: both columns present and nullable after migration; persisted one row with both fields populated and one without, both round-tripped correctly (populated vs. `null`) via `GET`. No existing arrangement rows needed backfilling — the only prior row was local test data already deleted.
+
+**Migration-ordering property confirmed this session (not previously documented as verified, only assumed):** `runMigrations()` runs every migration statement inside one `database.transaction()`, in array order. This means a later-added `ALTER TABLE ... ADD COLUMN` guard that checks a table's columns via `PRAGMA table_info` is safe even against a completely fresh database — the table's own `CREATE TABLE` (earlier in the array) has already executed by the time the guard's check runs, because array order is preserved within the single transaction. Tested directly: backed up the dev DB, deleted `sou_songs.db` (+ stale `-shm`/`-wal`), restarted the server, and confirmed via `PRAGMA table_info(arrangements)` that all 15 columns — including `import_source_type`/`import_source_url` — were present with no startup error, even though the auto-seed (`sou_songs_seed.db`, a June 2026 snapshot predating this table entirely) meant `arrangements` did not exist until this boot's migration created it. Dev DB restored from backup afterward.
+
+**Correction to prior documentation, not a new decision:** the original implementation prompt for Pass 1 pointed at `addChatTables.js` as the pattern to inspect for how migrations reach the Railway Volume. Inspection found this incorrect — `addChatTables.js` is a standalone one-off script (see the 12 June 2026 Session 10 entry, now annotated above); `runMigrations()` in `dbManager.js` is the actual mechanism that runs automatically on every server boot and reaches the Railway Volume on deploy, confirmed by finding `tool_calls` and `extracted_content` already added there ahead of this session. `arrangements` was added to `runMigrations()` accordingly, not to `addChatTables.js`.
+
+**Documentation updated this session:** this Session Log entry; a two-pass implementation note added to Section 5.5.2 alongside the schema block; Section 3 (Current Status) updated with the `arrangements` table's implementation state; the 12 June 2026 Session 10 entry annotated to clarify `addChatTables.js`'s one-off status. No other document sections changed.
+
+**Not done this session:** `resources`/`resource_files` tables, Print View, PDF generation, and any paste/review/edit UI remain out of scope and unstarted — see Section 5.5.7.
 
 ---
 
