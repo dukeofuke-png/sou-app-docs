@@ -1,6 +1,6 @@
 # MASTER_ARCHITECTURE.md
 
-**Last Updated:** 20 August 2026  
+**Last Updated:** 6 September 2026  
 **Status:** Definitive Source of Truth
 
 **Companion document:** `PRODUCT_ROADMAP.md` (same directory level) is the longer-range strategic/phase roadmap. This document remains the living, every-session-updated record of current technical state and near-term next steps; `PRODUCT_ROADMAP.md` is revisited periodically for longer-range sequencing, not every session.
@@ -47,7 +47,7 @@ Tutors should be able to use the platform as a comprehensive tool to devise less
   - Lightweight (auto on promote): `enrichmentService.js` → Spotify identity + GetSongBPM + YouTube
   - Rich (on-demand via ⚡): `enrichmentService_sqlite.js` → Wikipedia + Last.fm + GetSongBPM + Spotify cover art + MusicBrainz + release era/season/month derivation (no extra API call)
 - **`POST /api/songs/:id/enrich`** — on-demand rich enrichment endpoint, auth-gated
-- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). `resources`/`resource_files`/Print/PDF remain not-yet-started — see Section 5.5.
+- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. See Section 5.5.5a. Frontend paste/review UI (Section 5.5.8) is designed and approved but **not implemented** — no code exists in `sou-song-browser` for any of it. `resources`/`resource_files`/Print/PDF remain not-yet-started — see Section 5.5.
 - Chart enrichment (Wikipedia scraper + Soundcharts API)
 - BPM/Key enrichment (GetSongBPM API, `api.getsong.co`)
 - Spotify integration (track search, artist genres, cover art)
@@ -393,9 +393,11 @@ cd sou-song-browser && npm start
 
 ---
 
-### 5.5 ARRANGEMENT / SONGSHEET SYSTEM — APPROVED ARCHITECTURE, NOT YET IMPLEMENTED
+### 5.5 ARRANGEMENT / SONGSHEET SYSTEM — PARTIALLY IMPLEMENTED (BACKEND); FRONTEND NOT STARTED
 
-**Status: approved by Matthew, 31 August 2026. No code exists yet — `arrangements`, `resources`, and `resource_files` tables are not present in the live database, and no migration has been written or run.** This subsection records the frozen target schema so implementation proceeds against one agreed design. It documents an approved plan, not current running code — do not read anything below as evidence a table exists. See Section 17 (30 Aug 2026 entry) for what content-related work has actually shipped so far (`extracted_content`, `searchSongContent`).
+**Correction (6 Sep 2026):** this section's header/status previously read "APPROVED ARCHITECTURE, NOT YET IMPLEMENTED" and stated no code existed — that had gone stale and directly contradicted Section 3 and the 31 Aug Session Log entries below, which already documented the `arrangements` table, `arrangementParser.js`, and three endpoints as built and verified. The implementation note under 5.5.2 had been added correctly at the time; this header simply wasn't updated to match. Flagged and corrected here rather than silently — see the Project Operating System doc's governance rule on flagging document conflicts rather than resolving them invisibly.
+
+**Actual status as of 6 September 2026:** `arrangements` table, `arrangementParser.js` (including exported `decomposeChord`), and all three backend endpoints (`parse-preview`, persist, fetch) are live and verified — persist now also runs structural validation and server-side decomposition normalization (see 5.5.5a, added this session). `resources` and `resource_files` tables remain unbuilt — that part of the plan below is still a documented target, not running code. The frontend paste/review UI (5.5.5) has no implementation at all — see 5.5.8.
 
 #### 5.5.1 Canonical relationship
 
@@ -473,6 +475,8 @@ This is the sole approved content shape. An earlier interleaved chord/lyric toke
 }
 ```
 
+**Implementation status of `annotation` (confirmed 6 Sep 2026, via direct Copilot inspection of the full `parseArrangementText` function and a repo-wide grep):** `annotation` is schema-defined here but does not exist anywhere in the codebase — not produced by the parser, not referenced by any route or service. The parser's only section-construction path (`ensureSection`) unconditionally sets `type: 'lyrics_chords'` on every section it creates, with no branch that ever produces `annotation`. This was schema design that was never wired up to anything, not a regression. It remains valid canonical shape (the persist-endpoint structural validator added this session accepts it, see 5.5.5a) — future-proofing against canonical data, not against anything the current pipeline can produce. If `annotation` is never going to be reachable from the review UI either (no "add annotation" affordance is in the current frontend proposal — see 5.5.8), worth a future decision on whether to keep it in-schema indefinitely or explicitly retire it; not decided either way, just flagged.
+
 Key properties:
 - Lyric text is stored once per line, as a plain string.
 - Chords are stored separately, each carrying a `position` — a character offset into that line's `lyric` string.
@@ -500,6 +504,21 @@ The raw, un-normalized paste is preserved verbatim in `import_source_text` regar
 4. **Review/edit** — tutor corrects lyrics, chords, chord positions, and section structure before anything is persisted.
 5. **Persist** — only reviewed, structured content becomes canonical `arrangements.body_json`. The raw paste remains in `import_source_text` as provenance, never as a competing content source.
 
+#### 5.5.5a Persist-time validation and decomposition normalization (implemented 6 Sep 2026)
+
+**Context:** direct Copilot inspection this session found `POST /api/arrangements` ran zero validation on `body_json` beyond a bare `typeof === 'object'` check — no shape validation, no re-derivation of chord decomposition. This was a live, pre-existing gap (any caller could persist an arbitrary object into `body_json`), independent of and predating the review-UI design work. Closed this session, not left as a known gap.
+
+**Decision (see Decisions Log, 6 Sep 2026 entry): Option A — extend the existing persist endpoint, not a new endpoint.** `POST /api/arrangements` now runs two steps, in order, after the existing `song_id`/`body_json`-object checks and before the INSERT:
+
+- **Structural validation.** Confirms `schema_version === 1`; `sections` is an array; each section has `id` and a `type` of either `'lyrics_chords'` or `'annotation'` (both accepted — see the 6 Sep note under 5.5.3 on `annotation`'s actual implementation status); for `lyrics_chords`, each line has `lyric` (string) and `chords` (array), each chord has `position` (integer ≥ 0) and `symbol` (non-empty string); for `annotation`, `content.text` is a string. Any failure → `400` with a specific error identifying what failed, nothing inserted.
+- **Decomposition normalization.** Runs only after structural validation passes. For every chord in every `lyrics_chords` line, calls `decomposeChord(symbol)` (now exported from `arrangementParser.js` — previously implemented but not in the module's export list, a one-line fix, no behaviour change to the function itself) and overwrites **only** that chord's `root`/`quality`/`bass`. `symbol`, `position`, lyric text, and section id/type/title/order are never touched by this step. Wrapped in try/catch per chord — an unrecognised symbol degrades to `null` fields, never a `400`, per the existing domain rule in 5.5.3 that a chord with only `symbol` set is "not yet transposable, which is correct, not an error state."
+
+This is the sole authoritative normalization boundary in the whole pipeline. No other endpoint re-validates or re-derives decomposition.
+
+**Explicitly rejected this session:** a separate `decompose-symbols`-style endpoint for real-time per-edit validation during review (considered, then withdrawn — see Decisions Log). Chord-row edits during review remain purely local/client-side; decomposition is deferred entirely to this persist-time boundary. This means the review screen (5.5.8) makes zero network calls between the initial `parse-preview` and the final persist.
+
+**Verified (6 Sep 2026), against the live running server, all 8 cases:** valid payload with one recognisable and one unrecognisable chord symbol (correct decomposition / correct nulls, `symbol`/`position` untouched on both); `schema_version: 2` → 400, no insert; chord missing `position` → 400, no insert; chord missing `symbol` → 400, no insert; `annotation` section with valid `content.text` → 201, not wrongly rejected; a real multi-section `parse-preview` output persisted unmodified → 201, byte-identical decomposition (confirms normalization doesn't corrupt already-correct data); `decomposeChord` re-confirmed independently callable; invalid `type: 'foo'` → 400 identifying the bad type, no insert (this last case closes a gap in the original 7-test plan — the type whitelist itself hadn't actually been exercised until this check was added). All test rows deleted afterward.
+
 #### 5.5.6 Downstream compatibility — `resources.composition_json`
 
 `resources.composition_json.content_snapshot.sections` uses the same positional-anchor vocabulary as `arrangements.body_json` — a transposed, print-key-fixed snapshot captured at sync time, not a live reference to the Arrangement. No translation between two different content shapes occurs anywhere in this pipeline.
@@ -507,6 +526,22 @@ The raw, un-normalized paste is preserved verbatim in `import_source_text` regar
 #### 5.5.7 Explicitly out of scope for this slice
 
 Automated Ultimate Guitar scraping/API integration, AI transcription, audio chord extraction, TAB import/rendering, Arrangement version history, reusable repeated-section references, multi-import audit tables, and new authentication/role architecture are not part of this approved architecture. Commercial song-licensing/catalogue ingestion remains a parallel, non-blocking future track — see `PRODUCT_ROADMAP.md` Section 7.
+
+#### 5.5.8 Frontend review screen — approved design, not yet implemented (6 Sep 2026)
+
+Approved via Claude/ChatGPT architecture review this session; implementation prompt drafted same session, not yet run. Recorded here so the design exists in canonical documentation rather than only in chat history — the same gap that had to be caught and corrected for the backend slice on 31 Aug should not repeat here.
+
+- **Entry point:** a new `AdminDashboard` page (`activePage` switch-case pattern already used by `ManageSOUDatabase`/`ConversationWorkspace`/etc. — no router exists in `sou-song-browser`, none needed), reached via a song-row action or a new nav item.
+- **Screen 1 (paste):** monospace `text/plain` textarea → `POST /api/arrangements/parse-preview` → result held in local React state as canonical `body_json` shape. No persistence yet.
+- **Screen 2 (review) — paired monospace rows, not chord chips.** Each `lyrics_chords` line renders as two aligned, lockstep-horizontally-scrolling monospace rows: the lyric string, and a chord row synthesized fresh on each render from `chords[]` (spaces with each `symbol` inserted at its `position`). The chord row is a rendering projection only — never itself persisted or treated as a second source of truth; canonical state is always just `lyric` + `chords[]`.
+  - **Chord tokens are directly draggable** — absolutely-positioned spans, native pointer events (no drag/drop framework), snapping to the nearest monospace character column on release and writing straight into canonical `chord.position`. This is the primary editing interaction; it never touches `symbol`, so it needs no reparse and no decomposition step.
+  - Clicking empty chord-row space switches that row to plain-text edit mode (typing/retyping symbols); leaving the row retokenizes it locally (plain whitespace-splitting on the row string — not the real parser) back into `chords[]` entries. Implementation should favour the simplest discoverable version of this mode switch, not an elaborate UI system.
+  - **Lyric-row edits trigger client-side rebasing on leaving the row** (a single prefix/suffix diff between the row's value at focus and at blur, not per-keystroke): chords anchored after the edited span shift by the length delta; chords anchored *inside* the edited span keep their old position **unchanged** (never clamped) and are flagged in local UI state for tutor review. Multi-region edits within one edit session collapse into one conservative, wider-than-strictly-necessary ambiguity flag — accepted as a v1 simplification, no multi-hunk diff.
+  - **Chord-row symbol edits set that chord's canonical `root`/`quality`/`bass` to `null` immediately** (not retained from the prior symbol — stale decomposition describing a symbol that's no longer there is treated as false canonical data, not a harmless placeholder) and mark it `pending` in UI-only state (never written into the canonical fields). `pending` is resolved by the persist-time decomposition normalization (5.5.5a) — there is no earlier network call for this; a `decompose-symbols`-style endpoint was considered and explicitly rejected for v1 (see Decisions Log).
+  - Section headers and `annotation` content are plain single editable text fields — entirely outside the positional/rebase model.
+- **Persist:** `POST /api/arrangements` with the reviewed canonical `body_json`, `import_source_text` (the untouched original paste from Screen 1), `import_source_type: 'manual_paste'`. No `tutor_id` in the payload — server-derived, unchanged existing convention. A `400` (structural validation failure at 5.5.5a) is expected to be near-never in normal use, since the UI only ever produces well-formed canonical shape by construction — treated as a safety-net path, not a routine tutor-facing validation flow.
+- **Network calls in the whole flow: exactly two** — the initial `parse-preview`, and the final persist. Nothing per-edit, nothing per-pair, nothing on blur.
+- **Explicitly withdrawn during design, recorded so they aren't reconsidered from scratch later:** chord chips as a second positional representation (superseded by the projection-row model above); a full document-level reparse-from-raw-text as a pre-persist safety net (rejected — risks silently regenerating tutor-reviewed structure immediately before persistence; replaced by 5.5.5a's validate-in-place approach); a `decompose-symbols` endpoint for real-time per-edit chord validation (rejected for v1 as new API surface serving only transient UI feedback — revisit only if real UX need for immediate validation emerges).
 
 ---
 
@@ -1264,6 +1299,15 @@ Forward product direction, phased sequencing, and priorities are maintained excl
 ---
 
 ## 15. DECISIONS LOG
+
+### 6 September 2026 — Persist-Time Validation Boundary Chosen; Frontend Review-Screen Design Approved
+
+**Decision:** `POST /api/arrangements` is the sole authoritative validation/normalization boundary for `body_json` (Option A — extend the existing persist endpoint), not a new dedicated validation endpoint (Option B) and not a document-level reparse-from-raw-text. It runs structural validation (reject malformed shape, `400`) followed by decomposition normalization (recompute only `root`/`quality`/`bass` per chord via the now-exported `decomposeChord`, leaving `symbol`/`position`/lyric text/section structure untouched). A separate `decompose-symbols` endpoint for real-time per-edit chord validation during review was considered and explicitly rejected for v1. The frontend review screen uses paired, directly-editable monospace chord/lyric rows with column-snapped chord dragging as the primary interaction, not chord chips — canonical state remains solely `lyric` + `chords[].position` throughout; the paired rows are a rendering projection, never a second persisted representation. Lyric-edit rebasing preserves (never clamps) the old position of any chord whose anchor falls inside an edited span, flagging it for tutor review instead. A chord-row symbol edit immediately nulls that chord's canonical decomposition rather than retaining the prior symbol's now-stale values.  
+**Reason:** Direct inspection (Copilot, this session) found the persist endpoint currently runs zero validation on `body_json` beyond `typeof === 'object'` — a pre-existing gap, not something introduced by this design. Extending persist closes it with one authoritative boundary rather than adding parallel API surface (Option B/decompose-symbols) that would only serve transient UI feedback, or reconstructing-and-reparsing already-reviewed structure (rejected — risks silently overriding tutor-approved content immediately before it's saved). Chips were rejected in favour of paired rows because chips would have required a second positional representation and manual rebasing logic that the paired-row model avoids entirely — editing either row is exactly editing the string it visually represents, nothing more.  
+**Impact:** Backend change (Change 1: export `decomposeChord`; Change 2: validation + normalization in `POST /api/arrangements`) implemented and verified this session — see Session Log and Section 5.5.5a. Frontend implementation prompt drafted this session, not yet run — see Section 5.5.8 for the full approved design and Section 17 for prompt status.  
+**Alternatives considered:** Option B (dedicated validate-only endpoint) — rejected, no evidence persist couldn't be safely extended once inspected. `decompose-symbols` endpoint for live per-edit validation — rejected for v1, adds API surface for feedback that can wait until persist; revisit if real UX need emerges. Document-level reparse-from-raw-text as a pre-persist safety net — rejected, risks regenerating reviewed structure rather than validating it. Chord chips — rejected, introduces a second positional representation requiring rebasing logic the paired-row model doesn't need. Clamping ambiguous chord positions to the edit start — rejected, destroys potentially-useful positional information; flagging with the old position preserved is safer and fully correctable by the tutor.
+
+---
 
 ### 31 August 2026 — Arrangement Positional-Anchor Model Frozen; Phase 1 Chord/Lyric Import Architecture Approved
 
@@ -3337,6 +3381,30 @@ and not fixed here:
 **Documentation updated this session:** this Session Log entry; a two-pass implementation note added to Section 5.5.2 alongside the schema block; Section 3 (Current Status) updated with the `arrangements` table's implementation state; the 12 June 2026 Session 10 entry annotated to clarify `addChatTables.js`'s one-off status. No other document sections changed.
 
 **Not done this session:** `resources`/`resource_files` tables, Print View, PDF generation, and any paste/review/edit UI remain out of scope and unstarted — see Section 5.5.7.
+
+---
+
+### 6 September 2026 — Persist-Time Validation Implemented; Frontend Review-Screen Design Approved; Documentation Correction
+
+**Scope:** `materials-server` backend change (two small, targeted edits) plus architecture/design work for the frontend review screen (design only — no frontend code written this session). Also corrected a stale documentation contradiction found during this session's own governance check.
+
+**Documentation correction, not a new decision:** Section 5.5's header previously read "APPROVED ARCHITECTURE, NOT YET IMPLEMENTED" and stated no code existed, directly contradicting Section 3 and the 31 Aug Session Log entries already in this same file. Corrected — see the note now under 5.5's header.
+
+**Verified directly against repo this session, not assumed (two Copilot inspection-only passes before any implementation):**
+- `POST /api/arrangements` ran zero validation on `body_json` beyond `typeof === 'object'` — no shape check, no decomposition re-derivation. A pre-existing gap, unrelated to and predating this session's design work.
+- `decomposeChord` in `arrangementParser.js` is a standalone pure function of a symbol string (no raw-text/line context needed) but was not in the module's exports — a packaging gap, not an architectural inseparability.
+- `body_json` has no SQL-level constraint (plain `TEXT`, `NOT NULL`, nothing else); the only `CHECK` on the table is `status`.
+- A full read of `parseArrangementText` (all branches) confirmed it produces exactly one section `type`: `'lyrics_chords'`, always, via a single construction path (`ensureSection`). `annotation` — documented in 5.5.3's schema example — does not exist anywhere in the codebase (parser or otherwise); this was schema design that was never implemented, not a regression. See the note now under 5.5.3.
+
+**Decided (Claude/ChatGPT architecture review, no Matthew product decision required beyond build authorisation):** Option A (extend persist) over Option B (new validate endpoint) or a document-level reparse; paired-monospace-row frontend model over chord chips; column-snapped chord dragging as primary review interaction; immediate-null-on-symbol-edit for decomposition state; `decompose-symbols` endpoint explicitly rejected for v1. Full reasoning in the 6 Sep Decisions Log entry; full frontend design in Section 5.5.8.
+
+**Implemented and verified this session (backend only):**
+- **Change 1:** `decomposeChord` added to `arrangementParser.js`'s exports. No change to its implementation. Confirmed independently callable (`decomposeChord('Bbmaj7')` → correct decomposition) without going through `parseArrangementText`.
+- **Change 2:** `POST /api/arrangements` (`routes/arrangements.js`) now runs structural validation followed by decomposition normalization before insert — full detail in Section 5.5.5a. Verified against 8 cases on the live running server: valid payload with a recognisable and an unrecognisable chord symbol; invalid `schema_version`; chord missing `position`; chord missing `symbol`; valid `annotation` section (not wrongly rejected); a real `parse-preview` output persisted unmodified (byte-identical decomposition, confirming normalization doesn't corrupt already-correct data); `decomposeChord` export re-confirmed; invalid section `type` (closes a gap in the original 7-test plan, which hadn't actually exercised the type whitelist). All test rows deleted afterward; no schema/migration change.
+
+**Verification-integrity note, recorded because it happened, not because it mattered in the end:** Copilot's own session summary initially misstated one test's row count ("stayed at 0" when the actual value, confirmed in its own tool output, was 1) — caught by checking the report against itself rather than accepting the summary, re-verified against actual scrollback, confirmed as a write-up error only, not a real database event. No impact on the verified result. Recorded as a reminder that a Copilot summary is a claim to check, not evidence on its own — consistent with this project's standing "tool truth over conversational claim" rule.
+
+**Not done this session:** frontend implementation — Section 5.5.8's design is approved and an implementation prompt was drafted, but not yet run. `resources`/`resource_files`/Print/PDF remain unstarted, unchanged from prior sessions.
 
 ---
 
