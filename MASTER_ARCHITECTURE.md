@@ -397,7 +397,7 @@ cd sou-song-browser && npm start
 
 **Correction (6 Sep 2026):** this section's header/status previously read "APPROVED ARCHITECTURE, NOT YET IMPLEMENTED" and stated no code existed — that had gone stale and directly contradicted Section 3 and the 31 Aug Session Log entries below, which already documented the `arrangements` table, `arrangementParser.js`, and three endpoints as built and verified. The implementation note under 5.5.2 had been added correctly at the time; this header simply wasn't updated to match. Flagged and corrected here rather than silently — see the Project Operating System doc's governance rule on flagging document conflicts rather than resolving them invisibly.
 
-**Actual status as of 7 September 2026:** `arrangements` table, `arrangementParser.js` (including exported `decomposeChord`), and all three backend endpoints (`parse-preview`, persist, fetch) are live and verified — persist runs structural validation and server-side decomposition normalization (see 5.5.5a). The frontend paste/review UI (5.5.5) is now implemented and verified end-to-end against the live backend — see 5.5.8's updated status.
+**Actual status as of 7 September 2026:** `arrangements` table, `arrangementParser.js` (including exported `decomposeChord`), and all five backend endpoints (`parse-preview`, list by `song_id`, create, fetch-by-id, update) are live and verified — create and update both run the same shared structural validation and server-side decomposition normalization (see 5.5.5a). The frontend paste/review UI (5.5.5) is implemented and verified end-to-end against the live backend, including reopening an existing Arrangement for editing (not just fresh paste-import) — see 5.5.8's updated status.
 
 #### 5.5.1 Canonical relationship
 
@@ -514,6 +514,8 @@ The raw, un-normalized paste is preserved verbatim in `import_source_text` regar
 - **Decomposition normalization.** Runs only after structural validation passes. For every chord in every `lyrics_chords` line, calls `decomposeChord(symbol)` (now exported from `arrangementParser.js` — previously implemented but not in the module's export list, a one-line fix, no behaviour change to the function itself) and overwrites **only** that chord's `root`/`quality`/`bass`. `symbol`, `position`, lyric text, and section id/type/title/order are never touched by this step. Wrapped in try/catch per chord — an unrecognised symbol degrades to `null` fields, never a `400`, per the existing domain rule in 5.5.3 that a chord with only `symbol` set is "not yet transposable, which is correct, not an error state."
 
 This is the sole authoritative normalization boundary in the whole pipeline. No other endpoint re-validates or re-derives decomposition.
+
+**7 Sep 2026 update:** `PUT /api/arrangements/:id` (added for the reopen-and-edit slice, see the 7 Sep Session Log entry) calls the exact same `validateArrangementBody`/`normalizeChordDecomposition` functions — confirmed as a clean extraction requiring no refactor, since both were already standalone functions decoupled from the POST handler's INSERT statement, not inline or tightly coupled to it. No duplicated validation logic exists anywhere in this file.
 
 **Explicitly rejected this session:** a separate `decompose-symbols`-style endpoint for real-time per-edit validation during review (considered, then withdrawn — see Decisions Log). Chord-row edits during review remain purely local/client-side; decomposition is deferred entirely to this persist-time boundary. This means the review screen (5.5.8) makes zero network calls between the initial `parse-preview` and the final persist.
 
@@ -3431,6 +3433,34 @@ and not fixed here:
 **Fiber-state-inspection caveat found during verification, recorded so it isn't rediscovered from scratch:** manually walking a component's React fiber `memoizedState` hook linked list from dev tools/Playwright to read live state was unreliable in this session — it intermittently returned stale values that didn't match the actual rendered DOM/behaviour, for reasons not fully root-caused. Where this happened, verification instead used the app's own real data path (e.g., re-entering a chord row's text-edit mode to read the live-synthesized string, which is computed directly from canonical state) or a temporary `console.log` inside the handler under test (added and removed same session) — both proved reliable. Treat direct fiber-poking as untrustworthy for future verification in this app; prefer these alternatives.
 
 **Not done this session:** no other Section 5.5 work. `resources`/`resource_files`/Print/PDF remain unstarted.
+
+---
+
+### 7 September 2026 — Arrangement Builder: Reopen-and-Edit Slice (List + Update)
+
+**Scope:** `materials-server` (`routes/arrangements.js`) and `sou-song-browser` (`ArrangementBuilder.js`). Extends the paste/review UI shipped earlier the same day to support reopening and editing an existing Arrangement, not just fresh paste-import.
+
+**Step 0 inspection finding (as instructed, before writing any PUT code):** `validateArrangementBody` and `normalizeChordDecomposition` were already standalone, decoupled functions in `routes/arrangements.js` — not inline in the POST handler, not coupled to the INSERT statement. A clean extraction with zero refactor risk; no fork/design decision needed. Proceeded directly to a shared-function reuse, per the straightforward-extraction path.
+
+**Backend added:**
+- `GET /api/arrangements?song_id=X` — list endpoint, returns `id`/`title`/`status`/`created_at`/`updated_at`/`content_updated_at` only (no `body_json`, deliberately, to keep the list light). Missing `song_id` → `400`. No matches → `200` with `[]`.
+- `PUT /api/arrangements/:id` — accepts `{ title?, body_json }` only; calls the same `validateArrangementBody`/`normalizeChordDecomposition` functions as POST (no duplicated logic); updates `title` (if provided), `body_json`, `updated_at`, and `content_updated_at` (per 5.5.2's own rule that this field is bumped only by `body_json` writes). `song_id`, `tutor_id`, `created_at`, `status`, `published_at`, and all `import_source_*` fields are never read from the request body and never written by this route — if sent, silently ignored, same convention as `tutor_id` on POST. Not found → `404`.
+
+**Frontend added:** song-picker step now fetches existing Arrangements for the selected song and shows a plain list (title/status/last-updated) plus a "Start new Arrangement" option. Selecting an existing one fetches the full row via `GET /api/arrangements/:id` and goes directly to the review screen with that `body_json` as canonical state — Screen 1/parse-preview is skipped entirely for this path. Save now branches on whether the loaded Arrangement has an `id`: `PUT /api/arrangements/<id>` with `{ title, body_json }` only for an existing one (no `song_id`/`import_source_*` sent), `POST /api/arrangements` unchanged for a fresh paste. A PUT response's `id` is sanity-checked against the loaded `id` before accepting it as success.
+
+**Verified against the live running backend, all 8 cases:** empty list for a song with no arrangements (`200`, `[]`); created a fresh arrangement, confirmed it appears in the list with correct `id`/`title`/`status`; reselecting the song in the picker showed it in the existing-arrangements list, selecting it loaded directly into the review screen with correct paired rows (no Screen 1); dragged a chord, saved, confirmed (via network capture) a `PUT` — not `POST` — was sent to `/api/arrangements/<id>` with only `{title, body_json}`, and the returned `id` was unchanged; direct `GET /api/arrangements/:id` afterward confirmed the edit persisted (`position` changed from `0` to `3`) and `import_source_text`/`import_source_type`/`import_source_url` were byte-identical to their values at creation, with `updated_at`/`content_updated_at` bumped but `created_at` unchanged; `GET ?song_id=` afterward still showed exactly one row for that song (no duplicate created by the edit-and-save cycle); reopened the same Arrangement a second time via the picker and confirmed the review screen showed the edited position (not the original), proving the full reopen→edit→save→reopen loop round-trips; sent a malformed `body_json` (chord missing `position`) directly to `PUT /api/arrangements/:id`, confirmed `400` with a specific error, and confirmed via a byte-for-byte diff of the row before/after that nothing was partially written. All test rows deleted afterward.
+
+**Not done this session:** `status`/`published_at` untouched anywhere in this slice, as instructed — no publish flow exists yet. No version history, no multiple-drafts comparison, no undo — none of that was built, consistent with the explicit out-of-scope list for this slice.
+
+---
+
+### 7 September 2026 — Arrangement Builder Backend: Retroactive Commit (recovery-risk fix)
+
+**Found:** `routes/arrangements.js`, `services/arrangementParser.js`, and the related `dbManager.js` `arrangements` table migration and `server.js` route registration had been built and verified across the 31 Aug and 6 Sep sessions (plus this session's list/update slice) but were never actually committed to `materials-server` — a single-point-of-failure gap discovered while checking git status for an unrelated task, not something previously flagged.
+
+**Fixed:** committed as an isolated commit, scoped to exactly those four files (`0c4cee9`, `materials-server` — confirmed via `git show --stat` to contain nothing else) and pushed to `origin/main` (`sou-backend`, `364d9ea..0c4cee9`, fast-forward).
+
+**Left untouched, not part of this fix:** a small number of unrelated pre-existing modified/untracked files remain in that repo's working tree (`data/sou_songs.db`, `sou_songs_prod.db` + its `-shm`/`-wal`, `testMultiTurnToolUse.js`, `uploadTabsToR2.py`) — deliberately not swept in, not yet triaged.
 
 ---
 
