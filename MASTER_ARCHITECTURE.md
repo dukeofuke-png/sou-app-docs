@@ -523,7 +523,7 @@ This is the sole authoritative normalization boundary in the whole pipeline. No 
 
 #### 5.5.6 Downstream compatibility — `resources.composition_json`
 
-`resources.composition_json.content_snapshot.sections` uses the same positional-anchor vocabulary as `arrangements.body_json` — a transposed, print-key-fixed snapshot captured at sync time, not a live reference to the Arrangement. No translation between two different content shapes occurs anywhere in this pipeline.
+`resources.composition_json.content_snapshot.sections` uses the same positional-anchor vocabulary as `arrangements.body_json` — a print-key-fixed snapshot captured at sync time, not a live reference to the Arrangement. No translation between two different content shapes occurs anywhere in this pipeline.
 
 #### 5.5.7 Explicitly out of scope for this slice
 
@@ -544,6 +544,65 @@ Approved via Claude/ChatGPT architecture review 6 Sep 2026; implementation promp
 - **Persist:** `POST /api/arrangements` with the reviewed canonical `body_json`, `import_source_text` (the untouched original paste from Screen 1), `import_source_type: 'manual_paste'`. No `tutor_id` in the payload — server-derived, unchanged existing convention. A `400` (structural validation failure at 5.5.5a) is expected to be near-never in normal use, since the UI only ever produces well-formed canonical shape by construction — treated as a safety-net path, not a routine tutor-facing validation flow.
 - **Network calls in the whole flow: exactly two** — the initial `parse-preview`, and the final persist. Nothing per-edit, nothing per-pair, nothing on blur.
 - **Explicitly withdrawn during design, recorded so they aren't reconsidered from scratch later:** chord chips as a second positional representation (superseded by the projection-row model above); a full document-level reparse-from-raw-text as a pre-persist safety net (rejected — risks silently regenerating tutor-reviewed structure immediately before persistence; replaced by 5.5.5a's validate-in-place approach); a `decompose-symbols` endpoint for real-time per-edit chord validation (rejected for v1 as new API surface serving only transient UI feedback — revisit only if real UX need for immediate validation emerges).
+
+#### 5.5.9 Print/PDF architecture — settled this session (7 Sep 2026), not yet implemented
+
+Architecture-only session: two verification spikes (a local macOS spike, then a real Debian-container deployment check) informed the decisions below. No `resources`/`resource_files`/publish/generate code exists yet — this is the design the next implementation slice builds against, superseding the placeholder note under 5.5.1.
+
+**`resources` / `resource_files` — revised schema:**
+
+```sql
+CREATE TABLE resources (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  arrangement_id          INTEGER NOT NULL REFERENCES arrangements(id),
+  print_key               TEXT NOT NULL,
+  composition_json        TEXT NOT NULL,
+  source_content_updated_at TEXT,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (arrangement_id, print_key)
+);
+
+CREATE TABLE resource_files (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  resource_id    INTEGER NOT NULL REFERENCES resources(id),
+  file_type      TEXT,
+  r2_object_key  TEXT NOT NULL,
+  generated_at   TEXT NOT NULL,
+  UNIQUE (resource_id, file_type)
+);
+```
+
+- **`song_id`/`tutor_id` deliberately omitted** from `resources` — both derive through `arrangement_id`. Storing them again on `resources` would create a second, independently-driftable copy of an ownership fact that `arrangements` already owns — avoided on principle, same as every other place in this schema that resists parallel truths.
+- **`r2_url` deliberately omitted** from `resource_files` — `r2_object_key` is the canonical, stored value. The URL is derived at read time from the fixed R2 public base (Section 10.2) plus the key, never stored, so a future bucket/domain change never requires a data migration.
+- **`UNIQUE (arrangement_id, print_key)`, not one-Resource-per-Arrangement** — the schema permits multiple Resources per Arrangement (future print keys, e.g. a capo'd or re-keyed variant) even though v1 only ever creates one. Not building multi-print-key UI now; not painting the schema into a corner that would need a migration to support it later either.
+
+**Print key rule (v1 has no transposition engine):** `resources.print_key` is always `arrangements.default_teaching_key`, copied verbatim at publish time — there is no key-shifting logic anywhere in this pipeline yet. This is also why 5.5.6's wording above was corrected this session (removed "transposed" — it overstated what actually happens).
+
+**Publish/generate gating rule:** a Resource (and therefore a PDF) cannot be created while `arrangements.default_teaching_key IS NULL`. Publish/generate must fail explicitly — `400` with a clear message — in that case. The app must never infer or invent a teaching key to work around a missing one.
+
+**Two-phase publish/generate lifecycle:**
+
+1. **Publish** — sets `arrangements.status = 'published'` and upserts the `resources` row via `INSERT ... ON CONFLICT (arrangement_id, print_key) DO UPDATE` — the same idempotent-upsert pattern already established for `extracted_content` (see Section 17's 30 Aug 2026 entry). Purely local DB writes, no external dependency, safe to treat as one transaction.
+2. **Generate PDF** — renders the Resource's `composition_json`, uploads to R2 at a **deterministic** object key (e.g. `resource_{resource_id}.pdf` — never random or timestamped, so a retry overwrites rather than orphaning a stale file), then upserts `resource_files` via `ON CONFLICT (resource_id, file_type) DO UPDATE`. If this phase fails, the Arrangement remains validly `published` with no PDF yet — an explicitly normal, recoverable state per 5.5.1's existing statement that `published` is independent of whether a PDF has ever been generated.
+
+**PDF rendering — WeasyPrint chosen as the v1 renderer; HTML/CSS preserved as the rendering abstraction so the engine stays replaceable.**
+
+Evaluated against a Chromium-based approach (Playwright/Puppeteer) across two rounds of verification, not vendor claims:
+- A local macOS spike found equivalent rendering fidelity for the chord/lyric positional-alignment technique (both correctly reproduced the paired monospace rows' column alignment), with WeasyPrint initially measured ~3x lighter on install footprint.
+- A follow-up real Debian-container test — on `node:18-slim`, this repo's actual deploy base, using genuinely-installed Docker/Colima rather than assuming Railway compatibility — both confirmed the fidelity finding (actually opened the rendered PDF, not just checked the command exited `0`) and surfaced an important correction: installing via `apt install weasyprint` directly pulls a hard `python3-scipy` dependency (via Debian's `python3-fonttools` packaging, not anything WeasyPrint itself needs), dragging in numpy and a compiler toolchain for a **~1.35GB** image increase — worse than the Chromium alternative, not better.
+
+**The correct install path, which must be used when this is implemented:** `apt install python3-pip libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 libjpeg-dev libopenjp2-7-dev libffi-dev` followed by `pip install weasyprint` — confirmed to add only **~284MB**, no scipy/compiler chain, identical correct rendering. Confirmed against Nixpacks' own documentation that this repo does **not** need a Dockerfile migration to support this: `nixpacks.toml` supports an `aptPkgs` list for exactly this purpose, alongside a `cmds` step for the `pip install` — no impact on this repo's existing Nixpacks-based deploy config (env vars, build command) beyond adding that one file.
+
+**Dependency governance principle (project-wide, stated here because WeasyPrint is its first concrete application):**
+- Production-critical third-party dependencies must be explicitly version-pinned, never left to float to "latest."
+- No automatic production upgrades.
+- Any upgrade requires a targeted regression test against known fixtures before deploying.
+- Prefer mature, actively maintained, permissively licensed dependencies.
+- Avoid externally hosted/SaaS dependencies for core app functions where a self-hosted library is sufficient — this is why a hosted PDF-rendering API was considered and not chosen, despite its zero install footprint.
+- Preserve abstraction boundaries around replaceable infrastructure components. For the PDF renderer specifically: the Resource model and the rest of the pipeline must never depend on WeasyPrint-specific behaviour beyond "renders HTML/CSS to PDF," so a future engine swap never touches the `resources`/`resource_files` schema or the publish/generate lifecycle.
+
+Applied to WeasyPrint specifically: the exact WeasyPrint version and its system-package versions are to be pinned when implementation begins — not yet pinned, since this session's verification used whatever `pip`/`apt` resolved to at the time, which is fine for a spike but not for the real implementation.
 
 ---
 
@@ -1301,6 +1360,15 @@ Forward product direction, phased sequencing, and priorities are maintained excl
 ---
 
 ## 15. DECISIONS LOG
+
+### 7 September 2026 — Print/PDF Architecture Settled: Resources Schema, Publish/Generate Lifecycle, WeasyPrint as v1 Renderer
+
+**Decision:** `resources`/`resource_files` schema finalised per Section 5.5.9 — `r2_object_key` canonical (no stored `r2_url`), `song_id`/`tutor_id` omitted from `resources` (both derive through `arrangement_id`), `UNIQUE (arrangement_id, print_key)` cardinality (multi-print-key-ready, even though v1 only creates one). Publish/generate is a two-phase lifecycle: publish (sets `arrangements.status='published'`, upserts `resources` via `ON CONFLICT` — local DB only) is separate from generate (renders + uploads to R2 + upserts `resource_files` via `ON CONFLICT`), so a failed render leaves a validly-published Arrangement with no PDF yet, not a failed publish. A Resource/PDF cannot be created while `arrangements.default_teaching_key IS NULL` — must fail explicitly, never infer a key. WeasyPrint is the chosen v1 HTML/CSS→PDF renderer, installed via `pip` (not `apt install weasyprint` directly) behind an abstraction boundary that must never leak WeasyPrint-specific behaviour into the `resources` schema or lifecycle.  
+**Reason:** Object-key-canonical avoids storing a derivable URL that would need a migration if the R2 bucket/domain ever changes. Omitting `song_id`/`tutor_id` from `resources` avoids a second, independently-driftable copy of a fact `arrangements` already owns. The multi-print-key-ready `UNIQUE` constraint costs nothing now and avoids a schema migration if/when re-keyed variants are built later. The two-phase lifecycle matches the existing, already-documented semantics of `published` being independent of PDF existence (5.5.1) and reuses the idempotent upsert-on-conflict pattern already proven for `extracted_content` (30 Aug 2026), rather than inventing a new persistence pattern. The `default_teaching_key` gate exists because the app must never author musical data (a key) the tutor never actually chose. WeasyPrint was chosen over a Chromium-based approach (Playwright/Puppeteer) after two rounds of real verification (a macOS spike, then a genuine Debian-container test on this repo's actual `node:18-slim` deploy base) found equivalent rendering fidelity for the chord/lyric positional-alignment technique at meaningfully lower footprint — but only via the `pip`-based install path; `apt install weasyprint` directly was verified to pull a hard `python3-scipy` dependency via Debian's `python3-fonttools` packaging, ballooning the image by ~1.35GB (worse than Chromium), a critical correction this session's testing caught rather than assumed away.  
+**Impact:** Full schema, lifecycle, gating rule, and renderer decision recorded in Section 5.5.9. No code implemented this session — `resources`/`resource_files` tables, publish/generate endpoints, and the WeasyPrint integration remain unbuilt. Next session's job is turning this into a Copilot implementation prompt. When implementation begins, the exact WeasyPrint version and system-package versions must be pinned (not yet pinned — this session's spikes used whatever `pip`/`apt` resolved to).  
+**Alternatives considered:** Storing `r2_url` alongside `r2_object_key` — rejected, creates a derivable duplicate that can drift. One-Resource-per-Arrangement constraint — rejected, would need a migration to support future print keys the schema can accommodate for free now. A single-phase publish-and-generate action — rejected, couples a reliable local DB operation to an external, failure-prone network/render dependency, contradicting 5.5.1's existing "published independent of PDF" semantics. A Chromium-based renderer (Playwright/Puppeteer) — rejected on footprint grounds once the `pip`-based WeasyPrint path was verified equivalent in fidelity and lighter in the real deploy environment, not just a local spike. A hosted PDF-rendering SaaS API — rejected per the new dependency-governance principle (5.5.9): avoid externally hosted dependencies for core app functions where a self-hosted library suffices, despite the SaaS option's zero local install footprint.
+
+---
 
 ### 6 September 2026 — Persist-Time Validation Boundary Chosen; Frontend Review-Screen Design Approved
 
@@ -3461,6 +3529,22 @@ and not fixed here:
 **Fixed:** committed as an isolated commit, scoped to exactly those four files (`0c4cee9`, `materials-server` — confirmed via `git show --stat` to contain nothing else) and pushed to `origin/main` (`sou-backend`, `364d9ea..0c4cee9`, fast-forward).
 
 **Left untouched, not part of this fix:** a small number of unrelated pre-existing modified/untracked files remain in that repo's working tree (`data/sou_songs.db`, `sou_songs_prod.db` + its `-shm`/`-wal`, `testMultiTurnToolUse.js`, `uploadTabsToR2.py`) — deliberately not swept in, not yet triaged.
+
+---
+
+### 7 September 2026 — Print/PDF Architecture Session (schema, lifecycle, renderer choice — documentation only)
+
+**Scope:** no production code changed on this front this session — architecture-only, via a local macOS spike and a real Debian-container deployment verification (Docker/Colima installed locally for genuine testing, not assumed). See Section 5.5.9 for the full design and the 7 Sep Decisions Log entry above for the concise Decision/Reason/Impact summary.
+
+**Findings this session:**
+- Finalised the `resources`/`resource_files` schema (object-key-canonical, no derived-column duplication, multi-print-key-ready cardinality) — supersedes the placeholder note under 5.5.1.
+- Corrected 5.5.6's wording — removed "transposed," since v1 has no transposition engine; `print_key` is always `arrangements.default_teaching_key` copied verbatim.
+- Settled the two-phase publish/generate lifecycle and the `default_teaching_key` gating rule.
+- Chose WeasyPrint as the v1 PDF renderer over a Chromium-based approach (Playwright/Puppeteer), verified via two rounds of real testing rather than vendor claims — a local macOS spike, then a genuine Debian-container test on this repo's actual `node:18-slim` deploy base. The container test caught a real trap: `apt install weasyprint` directly pulls a hard `python3-scipy` dependency (Debian-packaging-specific, not a WeasyPrint requirement) for a ~1.35GB image increase — the `pip`-based install path (~284MB) is the one that must actually be used.
+- Confirmed via Nixpacks' own documentation that this repo does not need a Dockerfile migration — `nixpacks.toml`'s `aptPkgs` mechanism covers the required system packages.
+- Recorded a project-wide dependency-governance principle (version-pinning, no auto-upgrades, prefer self-hosted over SaaS for core functions, preserve replaceability of the renderer specifically).
+
+**Not done this session:** no code. `resources`/`resource_files` tables, publish/generate endpoints, and the WeasyPrint integration itself remain entirely unimplemented. Next session's job is turning Section 5.5.9 into a Copilot implementation prompt.
 
 ---
 
