@@ -47,7 +47,7 @@ Tutors should be able to use the platform as a comprehensive tool to devise less
   - Lightweight (auto on promote): `enrichmentService.js` → Spotify identity + GetSongBPM + YouTube
   - Rich (on-demand via ⚡): `enrichmentService_sqlite.js` → Wikipedia + Last.fm + GetSongBPM + Spotify cover art + MusicBrainz + release era/season/month derivation (no extra API call)
 - **`POST /api/songs/:id/enrich`** — on-demand rich enrichment endpoint, auth-gated
-- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. See Section 5.5.5a. Frontend paste/review UI (Section 5.5.8) is designed and approved but **not implemented** — no code exists in `sou-song-browser` for any of it. `resources`/`resource_files`/Print/PDF remain not-yet-started — see Section 5.5.
+- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. **7 Sep 2026:** frontend paste/review UI (Section 5.5.8) implemented (`ArrangementBuilder.js`) and verified end-to-end against the live backend. `resources`/`resource_files`/Print/PDF remain not-yet-started — see Section 5.5.
 - Chart enrichment (Wikipedia scraper + Soundcharts API)
 - BPM/Key enrichment (GetSongBPM API, `api.getsong.co`)
 - Spotify integration (track search, artist genres, cover art)
@@ -393,11 +393,11 @@ cd sou-song-browser && npm start
 
 ---
 
-### 5.5 ARRANGEMENT / SONGSHEET SYSTEM — PARTIALLY IMPLEMENTED (BACKEND); FRONTEND NOT STARTED
+### 5.5 ARRANGEMENT / SONGSHEET SYSTEM — PASTE-IMPORT SLICE IMPLEMENTED (BACKEND + FRONTEND)
 
 **Correction (6 Sep 2026):** this section's header/status previously read "APPROVED ARCHITECTURE, NOT YET IMPLEMENTED" and stated no code existed — that had gone stale and directly contradicted Section 3 and the 31 Aug Session Log entries below, which already documented the `arrangements` table, `arrangementParser.js`, and three endpoints as built and verified. The implementation note under 5.5.2 had been added correctly at the time; this header simply wasn't updated to match. Flagged and corrected here rather than silently — see the Project Operating System doc's governance rule on flagging document conflicts rather than resolving them invisibly.
 
-**Actual status as of 6 September 2026:** `arrangements` table, `arrangementParser.js` (including exported `decomposeChord`), and all three backend endpoints (`parse-preview`, persist, fetch) are live and verified — persist now also runs structural validation and server-side decomposition normalization (see 5.5.5a, added this session). `resources` and `resource_files` tables remain unbuilt — that part of the plan below is still a documented target, not running code. The frontend paste/review UI (5.5.5) has no implementation at all — see 5.5.8.
+**Actual status as of 7 September 2026:** `arrangements` table, `arrangementParser.js` (including exported `decomposeChord`), and all three backend endpoints (`parse-preview`, persist, fetch) are live and verified — persist runs structural validation and server-side decomposition normalization (see 5.5.5a). The frontend paste/review UI (5.5.5) is now implemented and verified end-to-end against the live backend — see 5.5.8's updated status.
 
 #### 5.5.1 Canonical relationship
 
@@ -527,9 +527,9 @@ This is the sole authoritative normalization boundary in the whole pipeline. No 
 
 Automated Ultimate Guitar scraping/API integration, AI transcription, audio chord extraction, TAB import/rendering, Arrangement version history, reusable repeated-section references, multi-import audit tables, and new authentication/role architecture are not part of this approved architecture. Commercial song-licensing/catalogue ingestion remains a parallel, non-blocking future track — see `PRODUCT_ROADMAP.md` Section 7.
 
-#### 5.5.8 Frontend review screen — approved design, not yet implemented (6 Sep 2026)
+#### 5.5.8 Frontend review screen — implemented and verified (7 Sep 2026)
 
-Approved via Claude/ChatGPT architecture review this session; implementation prompt drafted same session, not yet run. Recorded here so the design exists in canonical documentation rather than only in chat history — the same gap that had to be caught and corrected for the backend slice on 31 Aug should not repeat here.
+Approved via Claude/ChatGPT architecture review 6 Sep 2026; implementation prompt run 7 Sep 2026. `src/components/ArrangementBuilder.js` (+ `ArrangementBuilder.css`) implements the design below exactly, wired into `AdminDashboard`/`AdminLayout` via a new `'arrangement-builder'` `activePage` case, following the existing `ManageSOUDatabase` pattern. Verified end-to-end against the live running backend (localhost:3002) — see the 7 Sep 2026 Session Log entry for the full verification record, including the concrete pending-key/ambiguous-flag mechanism used (index-based keys, not extra fields injected into canonical `body_json`).
 
 - **Entry point:** a new `AdminDashboard` page (`activePage` switch-case pattern already used by `ManageSOUDatabase`/`ConversationWorkspace`/etc. — no router exists in `sou-song-browser`, none needed), reached via a song-row action or a new nav item.
 - **Screen 1 (paste):** monospace `text/plain` textarea → `POST /api/arrangements/parse-preview` → result held in local React state as canonical `body_json` shape. No persistence yet.
@@ -3405,6 +3405,32 @@ and not fixed here:
 **Verification-integrity note, recorded because it happened, not because it mattered in the end:** Copilot's own session summary initially misstated one test's row count ("stayed at 0" when the actual value, confirmed in its own tool output, was 1) — caught by checking the report against itself rather than accepting the summary, re-verified against actual scrollback, confirmed as a write-up error only, not a real database event. No impact on the verified result. Recorded as a reminder that a Copilot summary is a claim to check, not evidence on its own — consistent with this project's standing "tool truth over conversational claim" rule.
 
 **Not done this session:** frontend implementation — Section 5.5.8's design is approved and an implementation prompt was drafted, but not yet run. `resources`/`resource_files`/Print/PDF remain unstarted, unchanged from prior sessions.
+
+---
+
+### 7 September 2026 — Arrangement Builder Frontend Review Screen Implemented (Copilot)
+
+**Scope:** `sou-song-browser` frontend only, per the approved 5.5.8 design and the same-day implementation prompt. No backend files touched.
+
+**Built:** `src/components/ArrangementBuilder.js` + `ArrangementBuilder.css`. Wired in via a new `'arrangement-builder'` `activePage` case in `AdminDashboard.js` (same switch-case pattern as `manage-sou`) and a new sidebar entry in `AdminLayout.js`. Song picker reuses `ManageSOUDatabase`'s search-by-title/artist/id-over-`/api/songs` pattern rather than building a new one.
+
+**Implementation notes not fully spelled out in the prompt, resolved during the build:**
+- Confirmed actual `body_json` chord shape by reading `services/arrangementParser.js` directly rather than trusting 5.5.3's schema example in isolation: each `chords[]` entry is `{ position, chord: { symbol, root, quality, bass } }` (position is a sibling of `chord`, not inside it) — the frontend was built against this real shape.
+- `pending`/`ambiguous` UI-only flags are tracked as a `Set<string>` of `${sectionId}::${lineIndex}::${chordIndex}` keys in component state, not as extra fields injected into chord objects — keeps `body_json` sent to persist byte-for-byte canonical, no frontend-only cruft fields leaking into stored data.
+- Per 5.5.8/5.5.5a, `pending` chords get no visual treatment (confirmed via inspecting state directly, not rendered); `ambiguous` chords get a subtle dotted outline, cleared the moment that specific chord is dragged.
+
+**Verified against the live running backend (localhost:3002), all 7 scenarios from the implementation prompt:**
+1. Multi-section paste (verse with a chord-only line, two independently-repeated `[Chorus]` sections) parsed and rendered correctly as paired lyric/chord monospace rows.
+2. Dragged a chord token 5 columns right — position updated to the exact expected value, `symbol`/`root`/`quality`/`bass` unchanged (confirmed via React fiber state inspection).
+3. Retyped a chord symbol in text-edit mode, blurred — confirmed (via a temporary `console.log` added and removed for this check) the chord is marked pending with `root`/`quality`/`bass` set to `null`, while an untouched chord on the same row keeps its prior decomposition.
+4. Inserted text before a line's chords — later chords shifted by the exact insertion delta, an earlier chord (anchored before the edit) didn't move.
+5. Deleted a text span whose old bounds straddled a chord's anchor — that chord's position was left completely unchanged (not clamped/shifted) and got the ambiguous visual flag; chords before the edit were unaffected, chords after it shifted by the deletion delta. Confirmed dragging that same chord afterward clears the ambiguous flag.
+6. Persisted the reviewed arrangement (201); a follow-up direct `GET /api/arrangements/:id` confirmed server-side decomposition was populated correctly for recognisable chords, positions matched the reviewed state exactly, and `import_source_text` was the untouched original paste (not the edited lyric text). Test row deleted afterward.
+7. Simulated a 400 (structural validation failure) by intercepting the persist request at the network layer — confirmed the raw error message displays and the tutor's review state (lyric/chord edits) is fully preserved, not cleared.
+
+**Fiber-state-inspection caveat found during verification, recorded so it isn't rediscovered from scratch:** manually walking a component's React fiber `memoizedState` hook linked list from dev tools/Playwright to read live state was unreliable in this session — it intermittently returned stale values that didn't match the actual rendered DOM/behaviour, for reasons not fully root-caused. Where this happened, verification instead used the app's own real data path (e.g., re-entering a chord row's text-edit mode to read the live-synthesized string, which is computed directly from canonical state) or a temporary `console.log` inside the handler under test (added and removed same session) — both proved reliable. Treat direct fiber-poking as untrustworthy for future verification in this app; prefer these alternatives.
+
+**Not done this session:** no other Section 5.5 work. `resources`/`resource_files`/Print/PDF remain unstarted.
 
 ---
 
