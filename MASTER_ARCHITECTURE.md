@@ -47,7 +47,8 @@ Tutors should be able to use the platform as a comprehensive tool to devise less
   - Lightweight (auto on promote): `enrichmentService.js` → Spotify identity + GetSongBPM + YouTube
   - Rich (on-demand via ⚡): `enrichmentService_sqlite.js` → Wikipedia + Last.fm + GetSongBPM + Spotify cover art + MusicBrainz + release era/season/month derivation (no extra API call)
 - **`POST /api/songs/:id/enrich`** — on-demand rich enrichment endpoint, auth-gated
-- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. **7 Sep 2026:** frontend paste/review UI (Section 5.5.8) implemented (`ArrangementBuilder.js`) and verified end-to-end against the live backend. **15 Sep 2026:** `resources`/`resource_files`/Print/PDF pipeline (schema, publish endpoint, HTML renderer, WeasyPrint generation, R2 upload, frontend "Publish PDF" trigger) implemented and verified end-to-end — see Section 5.5.9.
+- **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. **7 Sep 2026:** frontend paste/review UI (Section 5.5.8) implemented (`ArrangementBuilder.js`) and verified end-to-end against the live backend. **15 Sep 2026:** `resources`/`resource_files`/Print/PDF pipeline (schema, publish endpoint, HTML renderer, WeasyPrint generation, R2 upload, `resource_files`, frontend single "Publish PDF" trigger) fully implemented and independently verified end to end — see Section 5.5.9.
+- **Milestone B: `courses`/`lessons`/`lesson_plans`/`lesson_plan_files` (Course/Lesson/Plan architecture)** — approved schema recorded in Section 5.5.11. **15 Sep 2026: Slice 1 complete** — schema (all four tables + indexes) plus Course/Lesson CRUD+update (`routes/courses.js`, `routes/lessons.js`), tutor-ownership enforcement (identical 404 whether nonexistent or another tutor's), and calendar/format validation (`services/dateValidation.js`), verified end-to-end. `lesson_plans`/`lesson_plan_files` remain schema-only, empty, unimplemented past that — Slice 2 (plan persist-time validation + upsert) not yet started.
 - Chart enrichment (Wikipedia scraper + Soundcharts API)
 - BPM/Key enrichment (GetSongBPM API, `api.getsong.co`)
 - Spotify integration (track search, artist genres, cover art)
@@ -545,9 +546,9 @@ Approved via Claude/ChatGPT architecture review 6 Sep 2026; implementation promp
 - **Network calls in the whole flow: exactly two** — the initial `parse-preview`, and the final persist. Nothing per-edit, nothing per-pair, nothing on blur.
 - **Explicitly withdrawn during design, recorded so they aren't reconsidered from scratch later:** chord chips as a second positional representation (superseded by the projection-row model above); a full document-level reparse-from-raw-text as a pre-persist safety net (rejected — risks silently regenerating tutor-reviewed structure immediately before persistence; replaced by 5.5.5a's validate-in-place approach); a `decompose-symbols` endpoint for real-time per-edit chord validation (rejected for v1 as new API surface serving only transient UI feedback — revisit only if real UX need for immediate validation emerges).
 
-#### 5.5.9 Print/PDF architecture — implemented and verified (15 Sep 2026)
+#### 5.5.9 Print/PDF architecture — fully implemented and independently verified end to end (15 Sep 2026)
 
-Designed in the 7 Sep 2026 architecture session below (two verification spikes: a local macOS spike, then a real Debian-container deployment check), then built and verified end-to-end across six slices on 15 Sep 2026 — schema, publish endpoint, HTML renderer, WeasyPrint PDF generation, R2 upload + `resource_files`, and the frontend "Publish PDF" trigger. See Section 17's 15 Sep 2026 entry for the commit-by-commit summary and Section 5.5.10 for two open decisions recorded along the way.
+Designed in the 7 Sep 2026 architecture session below (two verification spikes: a local macOS spike, then a real Debian-container deployment check), then built and independently verified end-to-end across six slices on 15 Sep 2026 — schema, publish endpoint, HTML renderer, WeasyPrint generation, R2 upload, `resource_files`, and the frontend's single "Publish PDF" trigger. See Section 17's 15 Sep 2026 entry for the commit-by-commit summary and Section 5.5.10 for two open decisions recorded along the way.
 
 **`resources` / `resource_files` — revised schema:**
 
@@ -609,6 +610,71 @@ Applied to WeasyPrint specifically: pinned at implementation time (15 Sep 2026) 
 **`default_teaching_key` has no format validation — deliberate, flagged, not resolved.** Before adding either the `PUT`/`POST` field or the publish-time gate, searched the whole repo (not just the chord-symbol parser) for any existing bare-musical-key validator, enum, whitelist, or normalization function. Found none. The only related code is `enrichmentService.js`'s and `enrichmentService_sqlite.js`'s `keyNumberToString()` helpers — both convert a *Spotify numeric pitch-class index (0–11)* to a *display string for `key_best`* during song enrichment, a different job for a different field, and the two tables even disagree with each other on notation (`'C#'` vs the combined `'C♯/D♭'` form). `sou_keys` (the existing free-text teaching-key CSV field) also has no validation anywhere. Chord-symbol root/quality/bass decomposition (`decomposeChord` in `arrangementParser.js`) was considered and explicitly rejected as a stand-in — it's a related but different job (parsing a full chord symbol, not validating a bare key name), and reusing it was tried and then reverted for that reason. Given no reusable mechanism exists, `default_teaching_key` is stored as a plain unvalidated string — matching the existing precedent already set by `SongEditor.js`'s `Key_Best` field, which has never had format validation either. **This is an open data-integrity gap, not an oversight:** a tutor can type anything into the teaching-key input and it will be accepted and published verbatim. The real permitted-values/UI decision (a fixed dropdown? free text with soft warnings? something else?) is deferred to a future session against real usage evidence, not guessed here.
 
 **Publish + generate-PDF collapsed into one frontend action, not two.** `ArrangementBuilder.js`'s "Publish PDF" button calls `POST /api/arrangements/:id/publish`, and — only if that succeeds — immediately calls `POST /api/resources/<resource.id>/generate-pdf` in the same click, using the `resource.id` straight from the publish response (no caching or reuse beyond that single click). If publish itself fails (missing `default_teaching_key`, 404, network error), its error is shown as-is and generate-pdf is never called. If generate-pdf fails after a successful publish, a distinct "Arrangement published — PDF generation failed: `<message>`" state is shown — never conflated with a full failure, since the Arrangement is genuinely, safely published at that point per 5.5.1/5.5.9's "published is independent of PDF" rule. Retry is simply re-clicking the same button: no resource-lookup endpoint, no separate retry UI, no disabled/enabled toggle beyond the in-flight loading state — this relies entirely on both `/publish` and `/generate-pdf` already being idempotent (`ON CONFLICT ... DO UPDATE` on both `resources` and `resource_files`), verified in the 15 Sep 2026 slices (Section 17).
+
+#### 5.5.11 Milestone B: Course/Lesson/Plan architecture — approved; Slice 1 complete, Slices 2+ not yet started
+
+**Approved schema (four tables):**
+
+```sql
+CREATE TABLE courses (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  tutor_id            INTEGER NOT NULL REFERENCES tutors(id),
+  title               TEXT NOT NULL,
+  level               TEXT,
+  venue               TEXT,
+  planned_start_date  TEXT,   -- YYYY-MM-DD, real calendar date
+  planned_end_date    TEXT,   -- YYYY-MM-DD, real calendar date
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE lessons (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  course_id     INTEGER NOT NULL REFERENCES courses(id),
+  scheduled_at  TEXT NOT NULL,   -- ISO-8601 UTC timestamp only
+  status        TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'took_place', 'cancelled')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE lesson_plans (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  lesson_id                INTEGER NOT NULL REFERENCES lessons(id),
+  plan_json                TEXT NOT NULL,
+  plan_content_updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (lesson_id)   -- one plan per Lesson
+);
+
+CREATE TABLE lesson_plan_files (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  lesson_plan_id     INTEGER NOT NULL REFERENCES lesson_plans(id),
+  file_type          TEXT NOT NULL CHECK (file_type IN ('prompt_sheet_pdf')),
+  r2_object_key      TEXT NOT NULL,
+  source_fingerprint TEXT NOT NULL,
+  generated_at       TEXT NOT NULL,
+  UNIQUE (lesson_plan_id, file_type),
+  UNIQUE (r2_object_key)
+);
+```
+
+Tutor ownership is never carried on `lessons`/`lesson_plans`/`lesson_plan_files` directly — it's always resolved by joining back to `courses.tutor_id`, the same no-parallel-truths principle as `resources` deriving ownership through `arrangement_id` (5.5.9). Every ownership check across this surface returns an identical 404 whether an id is genuinely nonexistent or belongs to another tutor — never distinguishable in the response (verified in Slice 1, see Section 17).
+
+**`plan_json` shape (confirmed so far, full shape finalized in Slice 2):** an object containing a `chunks` array, where each chunk references an `arrangement_id` (validated at persist time to reference a real, existing `arrangements` row — same structural-validation-at-the-persist-boundary discipline already established for `arrangements.body_json`, see 5.5.5a). Per-chunk fields beyond `arrangement_id` are not yet frozen.
+
+**API surface:**
+- `POST /api/courses`, `GET /api/courses`, `PUT /api/courses/:id` — **Slice 1, implemented and verified.**
+- `POST /api/lessons`, `GET /api/lessons?course_id=`, `PUT /api/lessons/:id` — **Slice 1, implemented and verified.**
+- `PUT /api/lessons/:id/plan` — idempotent upsert (`ON CONFLICT (lesson_id) DO UPDATE`) into `lesson_plans`, with persist-time structural validation of `plan_json` (including `chunks[].arrangement_id` existence) — **Slice 2, not yet started.** See Section 17's 15 Sep 2026 entry for the exact next-action scope.
+- Prompt-sheet generation/`lesson_plan_files` — **not yet started**, no slice scoped yet.
+
+**Explicitly deferred (named, not designed — no schema or behavior decided for any of these yet):**
+- Course status (no `status` column on `courses` — only `lessons` has one)
+- 1:1 Lessons (individual, non-Course-scheduled one-off lessons)
+- Course Plan (a course-level planning artifact, distinct from a per-Lesson plan)
+- SA-assisted planning (Studio Assistant/AI-assisted lesson plan drafting)
+- Handout-resource selection via `(arrangement_id, print_key)` (letting a tutor attach a specific existing `resources` row as a lesson handout)
 
 ---
 
@@ -3569,6 +3635,20 @@ and not fixed here:
 **Verified each slice against a live running backend (and, for slice 6, a live browser session with real network capture)** — fresh-DB migrations, transaction/idempotency checks, real PDF byte output confirmed via `pdf-parse`, a real R2 upload/overwrite/delete cycle via `wrangler`, and a forced upload-phase failure (wrangler temporarily removed from `PATH`, then restored) to confirm the partial-success state and failure isolation actually hold. Full transcripts live in session history, not repeated here.
 
 **Not done this session:** multi-print-key UI, `default_teaching_key` format validation (see 5.5.10), any Railway/production deploy of the WeasyPrint `nixpacks.toml` path, transposition/key-shifting of any kind.
+
+---
+
+### 15 September 2026 — Milestone B Slice 1: Course/Lesson Schema + CRUD/Update, Verified
+
+**Scope:** `materials-server` only. Schema for all four Course/Lesson/Plan tables (Section 5.5.11), plus Course/Lesson CRUD+update endpoints. `lesson_plans`/`lesson_plan_files` are schema-only in this slice — empty, no route reads or writes them.
+
+**Delivered and verified:** `courses`/`lessons`/`lesson_plans`/`lesson_plan_files` tables + four indexes added to `runMigrations()` (fresh-DB and idempotent-rerun both confirmed); `routes/courses.js` (`POST`/`GET`/`PUT`) and `routes/lessons.js` (`POST`/`GET`/`PUT`); tutor-ownership enforced on every course/lesson operation via an identical 404 regardless of whether an id is genuinely nonexistent or belongs to another tutor (verified byte-for-byte, not just asserted); `services/dateValidation.js` — real-calendar-date validation (construct-and-verify-no-rollover against native `Date.UTC`, no library dependency, correct for leap years) for `planned_start_date`/`planned_end_date` and `scheduled_at`'s date component; `scheduled_at` requires an explicit UTC designator and is canonicalized to `YYYY-MM-DDTHH:mm:ss.sssZ` on write; empty PUT bodies rejected (400, not a silent no-op) on both entities; `updated_at` bump and `start<=end` (checked against the merged existing+incoming state) both re-confirmed with the full validation stack in front of them.
+
+**Commit:** `cf135fd93f8a648ae8cbedc833462d71c85fb57e` (`materials-server`).
+
+**Not done this session:** plan upsert, `plan_json` validation, prompt-sheet generation, any frontend work. See Section 5.5.11 for the approved architecture and deferred-items list.
+
+**Next action (Slice 2), recorded so it isn't reconstructed from scratch:** `plan_json` persist-time structural validation — specifically validating `chunks[].arrangement_id` actually exists, using the same boundary-validation discipline already established for `arrangements.body_json` (5.5.5a) — plus an idempotent `PUT /api/lessons/:id/plan` upsert into `lesson_plans` via `ON CONFLICT (lesson_id) DO UPDATE`, mirroring the `resources` upsert pattern (5.5.9).
 
 ---
 
