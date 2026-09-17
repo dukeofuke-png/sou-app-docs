@@ -1,6 +1,6 @@
 # MASTER_ARCHITECTURE.md
 
-**Last Updated:** 6 September 2026  
+**Last Updated:** 17 September 2026  
 **Status:** Definitive Source of Truth
 
 **Companion document:** `PRODUCT_ROADMAP.md` (same directory level) is the longer-range strategic/phase roadmap. This document remains the living, every-session-updated record of current technical state and near-term next steps; `PRODUCT_ROADMAP.md` is revisited periodically for longer-range sequencing, not every session.
@@ -48,7 +48,7 @@ Tutors should be able to use the platform as a comprehensive tool to devise less
   - Rich (on-demand via ⚡): `enrichmentService_sqlite.js` → Wikipedia + Last.fm + GetSongBPM + Spotify cover art + MusicBrainz + release era/season/month derivation (no extra API call)
 - **`POST /api/songs/:id/enrich`** — on-demand rich enrichment endpoint, auth-gated
 - **`arrangements` table (Arrangement Builder Phase 1, paste-import backend slice)** — implemented across two passes (31 Aug 2026, see Session Log): base table + `arrangementParser.js` + parse-preview/persist/fetch endpoints, then a fast-follow adding `import_source_type`/`import_source_url`. 15 columns total, migration verified idempotent and fresh-DB-safe (confirmed against an empty database, not just the existing dev DB). **6 Sep 2026:** `POST /api/arrangements` extended with structural validation (400 on malformed `body_json`) and server-side decomposition normalization via newly-exported `decomposeChord`; verified against 8 cases including the type whitelist. **7 Sep 2026:** frontend paste/review UI (Section 5.5.8) implemented (`ArrangementBuilder.js`) and verified end-to-end against the live backend. **15 Sep 2026:** `resources`/`resource_files`/Print/PDF pipeline (schema, publish endpoint, HTML renderer, WeasyPrint generation, R2 upload, `resource_files`, frontend single "Publish PDF" trigger) fully implemented and independently verified end to end — see Section 5.5.9.
-- **Milestone B: `courses`/`lessons`/`lesson_plans`/`lesson_plan_files` (Course/Lesson/Plan architecture)** — approved schema recorded in Section 5.5.11. **15 Sep 2026: Slice 1 complete** — schema (all four tables + indexes) plus Course/Lesson CRUD+update (`routes/courses.js`, `routes/lessons.js`), tutor-ownership enforcement (identical 404 whether nonexistent or another tutor's), and calendar/format validation (`services/dateValidation.js`), verified end-to-end. `lesson_plans`/`lesson_plan_files` remain schema-only, empty, unimplemented past that — Slice 2 (plan persist-time validation + upsert) not yet started.
+- **Milestone B: `courses`/`lessons`/`lesson_plans`/`lesson_plan_files` (Course/Lesson/Plan architecture)** — approved schema recorded in Section 5.5.11. **15 Sep 2026: Slice 1 complete** — schema (all four tables + indexes) plus Course/Lesson CRUD+update (`routes/courses.js`, `routes/lessons.js`), tutor-ownership enforcement (identical 404 whether nonexistent or another tutor's), and calendar/format validation (`services/dateValidation.js`), verified end-to-end. **17 Sep 2026: Slice 2 complete** — `plan_json` structural validation (v1 chunk fields frozen: `arrangement_id`, `notes`, `timing_minutes`) plus idempotent `PUT`/`GET /api/lessons/:id/plan`, verified end-to-end, `materials-server` commit `abf0bd2`. `lesson_plan_files`/Prompt Sheet generation remain unimplemented — direct Lesson Plan authoring UI is next, not Prompt Sheet generation.
 - Chart enrichment (Wikipedia scraper + Soundcharts API)
 - BPM/Key enrichment (GetSongBPM API, `api.getsong.co`)
 - Spotify integration (track search, artist genres, cover art)
@@ -611,7 +611,7 @@ Applied to WeasyPrint specifically: pinned at implementation time (15 Sep 2026) 
 
 **Publish + generate-PDF collapsed into one frontend action, not two.** `ArrangementBuilder.js`'s "Publish PDF" button calls `POST /api/arrangements/:id/publish`, and — only if that succeeds — immediately calls `POST /api/resources/<resource.id>/generate-pdf` in the same click, using the `resource.id` straight from the publish response (no caching or reuse beyond that single click). If publish itself fails (missing `default_teaching_key`, 404, network error), its error is shown as-is and generate-pdf is never called. If generate-pdf fails after a successful publish, a distinct "Arrangement published — PDF generation failed: `<message>`" state is shown — never conflated with a full failure, since the Arrangement is genuinely, safely published at that point per 5.5.1/5.5.9's "published is independent of PDF" rule. Retry is simply re-clicking the same button: no resource-lookup endpoint, no separate retry UI, no disabled/enabled toggle beyond the in-flight loading state — this relies entirely on both `/publish` and `/generate-pdf` already being idempotent (`ON CONFLICT ... DO UPDATE` on both `resources` and `resource_files`), verified in the 15 Sep 2026 slices (Section 17).
 
-#### 5.5.11 Milestone B: Course/Lesson/Plan architecture — approved; Slice 1 complete, Slices 2+ not yet started
+#### 5.5.11 Milestone B: Course/Lesson/Plan architecture — approved; Slices 1–2 complete; direct Lesson Plan authoring UI scoped next (Prompt Sheet generation deferred until an authoring workflow exists)
 
 **Approved schema (four tables):**
 
@@ -661,13 +661,19 @@ CREATE TABLE lesson_plan_files (
 
 Tutor ownership is never carried on `lessons`/`lesson_plans`/`lesson_plan_files` directly — it's always resolved by joining back to `courses.tutor_id`, the same no-parallel-truths principle as `resources` deriving ownership through `arrangement_id` (5.5.9). Every ownership check across this surface returns an identical 404 whether an id is genuinely nonexistent or belongs to another tutor — never distinguishable in the response (verified in Slice 1, see Section 17).
 
-**`plan_json` shape (confirmed so far, full shape finalized in Slice 2):** an object containing a `chunks` array, where each chunk references an `arrangement_id` (validated at persist time to reference a real, existing `arrangements` row — same structural-validation-at-the-persist-boundary discipline already established for `arrangements.body_json`, see 5.5.5a). Per-chunk fields beyond `arrangement_id` are not yet frozen.
+**`plan_json` shape — v1 chunk fields frozen at Slice 2 (17 Sep 2026, `materials-server` commit `abf0bd2`):** an object containing a `chunks` array. Each chunk must be a plain object (not null, not an array), with these fields:
+- `arrangement_id` — optional; absent or `null`, or an integer referencing a real, existing `arrangements` row (existence checked at persist time, inside the same transaction as the upsert, immediately before it — see 5.5.5a for the parallel `arrangements.body_json` boundary-validation discipline).
+- `notes` — optional string.
+- `timing_minutes` — optional, non-negative number (integer or float ≥ 0).
+
+No other chunk fields are defined in v1. Pure structural shape validation (chunk-is-object, field types) runs before any transaction opens; nothing is written to `lesson_plans` unless both validation phases pass. `plan_json` is stored as `JSON.stringify`'d `TEXT` and parsed back to an object on read, matching the existing `arrangements.body_json` convention.
 
 **API surface:**
 - `POST /api/courses`, `GET /api/courses`, `PUT /api/courses/:id` — **Slice 1, implemented and verified.**
 - `POST /api/lessons`, `GET /api/lessons?course_id=`, `PUT /api/lessons/:id` — **Slice 1, implemented and verified.**
-- `PUT /api/lessons/:id/plan` — idempotent upsert (`ON CONFLICT (lesson_id) DO UPDATE`) into `lesson_plans`, with persist-time structural validation of `plan_json` (including `chunks[].arrangement_id` existence) — **Slice 2, not yet started.** See Section 17's 15 Sep 2026 entry for the exact next-action scope.
-- Prompt-sheet generation/`lesson_plan_files` — **not yet started**, no slice scoped yet.
+- `PUT /api/lessons/:id/plan` — idempotent upsert (`ON CONFLICT (lesson_id) DO UPDATE`) into `lesson_plans`; ownership enforced via the same `courses.tutor_id`-join, identical-404 pattern as Slice 1. Canonical success response: `{ id, lesson_id, plan_content_updated_at }`. **Slice 2, implemented and verified, `materials-server` commit `abf0bd2`.**
+- `GET /api/lessons/:id/plan` — same ownership/404 pattern; 404 also if the lesson exists but has no plan yet. Returns `{ id, lesson_id, plan_json, plan_content_updated_at, created_at, updated_at }`. **Slice 2, implemented and verified, `materials-server` commit `abf0bd2`.**
+- Prompt-sheet generation/`lesson_plan_files` — **not yet started**, no slice scoped yet; deferred until direct authoring UI exists (see header above).
 
 **Explicitly deferred (named, not designed — no schema or behavior decided for any of these yet):**
 - Course status (no `status` column on `courses` — only `lessons` has one)
