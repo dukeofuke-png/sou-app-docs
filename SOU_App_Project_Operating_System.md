@@ -9,7 +9,7 @@
 
 These are binding gates, not general guidance. They are stated exactly as written, not paraphrased, because precision matters more than elegance for rules like these.
 
-> Read `MASTER_ARCHITECTURE.md`, `PRODUCT_ROADMAP.md`, the CONSOLIDATED PRODUCT & UX SPECIFICATION, and the CURRENT_BUILD_GAP_ANALYSIS before any planning discussion.
+> Read `MASTER_ARCHITECTURE.md`, `PRODUCT_ROADMAP.md`, `PRODUCT_UX_SPEC.md`, and the CURRENT_BUILD_GAP_ANALYSIS before any planning discussion.
 >
 > Governance: `MASTER_ARCHITECTURE.md` = what exists now; UX Spec = what's designed; `PRODUCT_ROADMAP.md` = what's built next and in what order. Where documents conflict, flag it rather than silently resolving it.
 >
@@ -31,13 +31,13 @@ It does **not** cover SOU's broader business (marketing, tutor recruitment, CIC 
 
 ## 2. Canonical documents and their authority
 
-Three documents form the permanent governance structure. A fourth is a known open item (see 2.4).
+Three documents form the permanent governance structure. `PROJECT_FEATURE_MAP.md` is retained only as superseded historical material.
 
 | Document | Owns | Notes |
 |---|---|---|
 | `MASTER_ARCHITECTURE.md` | What exists **now**: implemented architecture, deployment, actual schema, live systems, session history, current risks, immediate engineering work | Every-session-updated. Trust actual code over this doc if they conflict. |
 | `PRODUCT_ROADMAP.md` | What gets **built next** and in what order: sequencing, phases, priorities, September Utility lane | Revisited periodically, not every session. |
-| Consolidated Product & UX Specification | What the product has been **designed** to do: resolved UX, objects, relationships, permissions, workflows, MVP/deferred decisions | Currently exists under its original filename, not yet promoted to `PRODUCT_UX_SPEC.md` — see 2.4. |
+| `PRODUCT_UX_SPEC.md` | What the product has been **designed** to do: resolved UX, objects, relationships, permissions, workflows, MVP/deferred decisions | Canonical, v1.0, explicitly approved by Matthew (20 Sep 2026). Supersedes the former Consolidated Product & UX Specification, retained only as historical record of the 25 Aug 2026 consolidation. |
 | `PROJECT_FEATURE_MAP.md` | Superseded. June 2026 vision, materially conflicts with the August 2026 resolved design. | Do not treat as current. Reference only for historical "why did we used to think X" questions. |
 
 **Governance rule:** where documents disagree about what currently *exists*, `MASTER_ARCHITECTURE.md` is corrected. Where they disagree about what to build *next or in what order*, `PRODUCT_ROADMAP.md` governs. Where a document conflicts with actual repo/code evidence, the repo wins.
@@ -68,8 +68,8 @@ Phase 0 (Studio stabilisation) → Phase 1 (PDF/lyric extraction) → Phase 2 (D
 
 **Before starting Phase 2/Milestone A implementation:** confirm with Matthew that this is genuinely next (not skipping straight past e.g. an unaddressed data-integrity item — see Section 7), since a session ending doesn't mean the next session should assume momentum alone decides what's next.
 
-### 2.4 Known open item: PRODUCT_UX_SPEC.md
-The Design Reconciliation Audit recommended promoting the Consolidated Product & UX Specification into a canonical file named `PRODUCT_UX_SPEC.md`, archiving `PROJECT_FEATURE_MAP.md`, and updating both `MASTER_ARCHITECTURE.md`'s governance references and `PRODUCT_ROADMAP.md`'s sequencing accordingly. **As of 30 Aug 2026, this promotion had not been executed.** This is a known, already-diagnosed gap — do not re-investigate it from scratch as a mystery. Check the current file list first: if `PRODUCT_UX_SPEC.md` now exists, the gap is closed and this note is stale — update it. If not, it remains open and is safe to leave open; it is not a blocker to Milestone A work.
+### 2.4 Closed item: PRODUCT_UX_SPEC.md promotion (resolved 20 Sep 2026)
+The Design Reconciliation Audit recommended promoting the Consolidated Product & UX Specification into a canonical file named `PRODUCT_UX_SPEC.md`, archiving `PROJECT_FEATURE_MAP.md` as historical, and updating `MASTER_ARCHITECTURE.md`'s and `PRODUCT_ROADMAP.md`'s governance references accordingly. **This promotion was completed and explicitly approved by Matthew on 20 Sep 2026** (`PRODUCT_UX_SPEC.md` v1.0). The former Consolidated Product & UX Specification and `PROJECT_FEATURE_MAP.md` are retained only as superseded historical material — see the Section 2 table. Closed; kept here for history, not as an open task.
 
 ---
 
@@ -154,7 +154,7 @@ Following the 17–18 Sep 2026 nested-clone incident (Section 7, Section 9), the
 At the end of any SOU App session that changed technical state, product decisions, or working process, before ending:
 
 1. **If code/architecture changed:** confirm the relevant Copilot session correctly updated `MASTER_ARCHITECTURE.md`'s session log, current-status section, and decisions log. This is Copilot's job per its own standing instructions, not Claude's — but check it happened rather than assuming.
-2. **If a product/UX decision was made:** note whether it belongs in the Consolidated Spec / future `PRODUCT_UX_SPEC.md`, and flag if that file needs updating.
+2. **If a product/UX decision was made:** note whether it belongs in `PRODUCT_UX_SPEC.md`, and flag if that file needs updating.
 3. **If sequencing/priority changed:** note whether `PRODUCT_ROADMAP.md` needs updating, and flag it rather than silently letting it drift.
 4. **If this Project's own working process changed** (new conventions, corrected assumptions, a resolved open item like Section 2.4): update **this document** (the Project Operating System) accordingly. Treat this the same way Copilot treats its session log — a required habit, not an optional nicety.
 5. **If the change is significant enough that ChatGPT would benefit from knowing it:** produce a reverse handover per Section 5.3.
@@ -197,3 +197,4 @@ Claude's file tools only reach a private sandbox and Google Drive (via the conne
 - **6 Sep 2026** — Added the "implementation is the default state" principle to Section 4, following a session where documentation/verification process consumed roughly half the session time disproportionate to risk. See that session's handover doc for full detail.
 - **18 Sep 2026** — Resolved a documentation-mismatch incident and added a standing caution to Section 7. Sequence: a new-session handover claimed `MASTER_ARCHITECTURE.md` had been updated and pushed to `sou-app-docs` at commit `7bbd823`, but the copy in Project Knowledge (and a fresh re-upload from Matthew) was byte-identical to the pre-update version. Claude twice proposed unverified explanations for the mismatch (first that the update simply hadn't happened; then, after being shown a transcript proving the commit was real and tool-verified, that the local clone had "moved" and the parent-folder copy was safe to delete) before the actual cause was established through direct git evidence rather than narrative-building: ChatGPT, working with Copilot, had accidentally `git clone`d the `sou-app-docs` remote into a new nested `SOU App/sou-app-docs/` subfolder rather than recognising that the existing parent-folder working tree already was that clone; that session's doc commits landed in the nested clone; the long-established parent copy sat unpulled and correctly looked stale. Fixed by fast-forwarding the parent (`git pull`, no conflicts) and deleting the nested duplicate once confirmed clean. Standing lesson, now in Section 7: this root folder **is** the `sou-app-docs` clone — never re-clone it into a subfolder of itself, and treat any claim about what a canonical doc "now contains" (from a handover, a session-summary, or Claude's own prior confirmation) as unverified until checked directly against the file Project Knowledge is actually serving, not assumed correct because a related git operation was previously verified.
 - **18 Sep 2026 (later same day)** — Added Section 5.4, revising AI-collaboration operational authority following the incident above. ChatGPT no longer issues any Git/filesystem/repository-management instructions — Claude is now sole author of operational instructions to Copilot, translating any Ch-originated or Matthew-approved decision into the actual prompt. Recorded that both failure modes are real and evidenced: insufficient verification before an operational claim (the nested-clone incident) and excessive verification/ceremony displacing ordinary progress (Ch's own transcript-confirmed admission that unnecessary delay came from auditing repositories before starting a specified task). The dividing line is reversibility/topology-risk of the specific action, not category of the surrounding work: repo-topology changes require verified current-state evidence first; destructive/hard-to-reverse actions additionally require Matthew's explicit approval; routine edits within an already-verified repo proceed without added ceremony; architecture/schema/migration/security/data-integrity decisions retain design review. Also made explicit: Matthew is product owner, not technical supervisor — the workflow must not depend on him catching repository/code/schema/infrastructure anomalies himself.
+- **20 Sep 2026** — `PRODUCT_UX_SPEC.md` v1.0 approved by Matthew as the canonical Product & UX Specification, closing the Section 2.4 open item. Updated Section 0, the Section 2 governance table, and Section 6 to reference `PRODUCT_UX_SPEC.md` directly. Former Consolidated Product & UX Specification and `PROJECT_FEATURE_MAP.md` recorded as superseded historical material only.

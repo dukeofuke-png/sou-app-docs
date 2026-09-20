@@ -653,7 +653,7 @@ After the current Studio loop is stabilised, continue with the already-agreed PD
 
 The **next major product build after that is the Digital Songsheet Builder**, with the explicit objective of allowing SOU to stop creating new print-only songsheets as soon as practical.
 
-Before implementing Songsheet Builder, inspect the existing product vision / `PROJECT_FEATURE_MAP.md` and current codebase, then propose the smallest viable native songsheet data model and editor architecture for review.
+Before implementing Songsheet Builder, inspect the existing product vision / `PRODUCT_UX_SPEC.md` and current codebase, then propose the smallest viable native songsheet data model and editor architecture for review.
 
 Do not code the schema before showing the proposal.
 
